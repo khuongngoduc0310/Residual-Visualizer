@@ -12,6 +12,7 @@ format used by both Google Colab training and the local inspection app.
 - NumPy 2.1.3
 - h5py 3.16.0
 - protobuf 5.29.6
+- Gradio 6.26.0
 - WSL2/Linux with an NVIDIA driver for GPU inference
 
 TensorFlow 2.20 does not provide native-Windows NVIDIA GPU support. Native
@@ -41,6 +42,31 @@ checks with:
 python -m pip check
 python -m pytest
 ```
+
+## Run The Local App
+
+Extract a Colab checkpoint before loading it. The app reads the checkpoint from
+the machine running Python; it does not upload the folder through the browser.
+For example, a checkpoint stored on the Windows drive is available in WSL2 at
+`/mnt/c/Projects/Circuit Tracer/exports/checkpoint-20260902`.
+
+Start the app inside WSL2:
+
+```bash
+source .venv/bin/activate
+python app.py
+```
+
+Open `http://127.0.0.1:7860` in the Windows browser. Enter the extracted folder
+path in **Checkpoint folder (server path)** and press **Load Model**. The app
+validates all three files before showing the model details, reports CUDA GPU or
+CPU based on TensorFlow's actual device visibility, and keeps the Gradio server
+bound to localhost with public sharing disabled.
+
+Loading a new checkpoint first releases the current model and clears the old
+details. If the replacement fails, no model remains active. TensorFlow may keep
+reserved GPU memory until the process exits even after the old model is
+released.
 
 ## Checkpoint Folder
 
