@@ -1,0 +1,4 @@
+tensorflow==2.10.1
+numpy==1.23.5
+protobuf==3.19.6
+h5py==3.16.0
