@@ -7,11 +7,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
-import gradio as gr
+import matplotlib
+import numpy as np
 import tensorflow as tf
+
+matplotlib.use("Agg")
+from matplotlib import pyplot as plt
+from matplotlib.figure import Figure
+
+import gradio as gr
 
 from analysis import AnalysisError, PromptAnalysis, analyze_prompt
 from checkpoint import CheckpointError, LoadedCheckpoint, load_checkpoint
+from inspection import (
+    DEFAULT_LOCATION_KEY,
+    location_choices,
+    location_spec,
+)
 from model import ARCHITECTURE_NAME, ModelConfig
 
 
@@ -69,6 +81,11 @@ APP_CSS = """
     font-size: 0.78rem;
     margin-top: 0.45rem;
 }
+.ct-stage.ct-selected {
+    border-color: #2563eb;
+    background: #eff6ff;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25);
+}
 .ct-arrow {
     align-self: center;
     color: #94a3b8;
@@ -97,6 +114,12 @@ class LoadedState:
     checkpoint: LoadedCheckpoint
     checkpoint_path: Path
     device: ComputeDevice
+
+
+@dataclass(frozen=True)
+class InspectionSession:
+    analysis: PromptAnalysis
+    config: ModelConfig
 
 
 @dataclass(frozen=True)
@@ -180,8 +203,11 @@ def _config_details(config: Optional[ModelConfig]) -> dict:
     }
 
 
-def render_model_diagram(config: Optional[ModelConfig] = None) -> str:
-    """Render stable stage keys for future internal-location highlighting."""
+def render_model_diagram(
+    config: Optional[ModelConfig] = None,
+    selected_key: Optional[str] = None,
+) -> str:
+    """Render the model stages, highlighting the selected internal location."""
     details = _config_details(config)
     stages = [
         ("embedding", "Residual Stream", "Token + position embeddings", details["embedding"]),
@@ -196,12 +222,14 @@ def render_model_diagram(config: Optional[ModelConfig] = None) -> str:
     ]
     cards = []
     for index, (key, category, name, detail) in enumerate(stages):
+        classes = "ct-stage ct-selected" if key == selected_key else "ct-stage"
         cards.append(
-            "<div class=\"ct-stage\" data-stage=\"{}\">"
+            "<div class=\"{}\" data-stage=\"{}\">"
             "<div class=\"ct-stage-label\">{}</div>"
             "<div class=\"ct-stage-name\">{}</div>"
             "<div class=\"ct-stage-detail\">{}</div>"
             "</div>".format(
+                classes,
                 html.escape(key),
                 html.escape(category),
                 html.escape(name),
@@ -290,6 +318,99 @@ def _analysis_failure_result(message: str) -> AnalysisResult:
     )
 
 
+def _token_choices(analysis: PromptAnalysis) -> list:
+    return [
+        (f"{token.position}: {token.text}", str(token.position))
+        for token in analysis.tokens
+    ]
+
+
+def location_explanation(spec) -> str:
+    """Markdown heading, category and plain-language explanation."""
+    return (
+        f"### {spec.category} \u00b7 {spec.label}\n\n{spec.explanation}"
+    )
+
+
+def location_stats(spec, values: np.ndarray) -> str:
+    """Markdown line describing the captured tensor's shape and spread."""
+    seq_len, width = values.shape
+    return (
+        f"**Shape:** `{seq_len} \u00d7 {width}`\n"
+        f"**Range:** min `{values.min():.4f}`, mean `{values.mean():.4f}`, "
+        f"max `{values.max():.4f}`"
+    )
+
+
+def render_location_heatmap(
+    values: np.ndarray,
+    token_position: int,
+    spec,
+) -> Figure:
+    """Render one captured location as a positions-by-dimensions heatmap."""
+    seq_len, width = values.shape
+    figure, axis = plt.subplots(figsize=(max(7.0, seq_len * 0.5), 4.8))
+    image = axis.imshow(
+        values.T,
+        aspect="auto",
+        cmap="viridis",
+        interpolation="nearest",
+    )
+    figure.colorbar(image, ax=axis, label="value")
+    axis.set_title(f"{spec.label} \u2014 {spec.category}")
+    axis.set_xlabel("token position")
+    axis.set_ylabel("dimension")
+    axis.set_xticks(range(seq_len))
+    axis.set_xticklabels([str(position) for position in range(seq_len)])
+    if 0 <= token_position < seq_len:
+        axis.axvspan(
+            token_position - 0.5,
+            token_position + 0.5,
+            facecolor="none",
+            edgecolor="#dc2626",
+            linewidth=2.2,
+        )
+    figure.tight_layout()
+    return figure
+
+
+INSPECT_AWAITING = (
+    "Analyze a prompt to capture every internal location."
+)
+
+
+def _empty_inspection_outputs():
+    empty_dropdown = gr.update(choices=[], value=None)
+    return (
+        empty_dropdown,
+        empty_dropdown,
+        INSPECT_AWAITING,
+        "",
+        None,
+        render_model_diagram(),
+    )
+
+
+def _successful_inspection_outputs(session: InspectionSession):
+    analysis = session.analysis
+    spec = location_spec(DEFAULT_LOCATION_KEY)
+    location_dropdown = gr.update(choices=location_choices(), value=spec.key)
+    token_dropdown = gr.update(
+        choices=_token_choices(analysis),
+        value=str(analysis.token_count - 1),
+    )
+    values = analysis.capture.locations[spec.key]
+    figure = render_location_heatmap(values, analysis.token_count - 1, spec)
+    return (
+        location_dropdown,
+        token_dropdown,
+        location_explanation(spec),
+        location_stats(spec, values),
+        figure,
+        render_model_diagram(session.config, selected_key=spec.key),
+    )
+
+
 class ModelManager:
     """Own the single server-side checkpoint used by the application."""
 
@@ -306,14 +427,31 @@ class ModelManager:
         self._collector = collector
         self._lock = threading.RLock()
         self._state: Optional[LoadedState] = None
+        self._session: Optional[InspectionSession] = None
 
     @property
     def loaded_state(self) -> Optional[LoadedState]:
         with self._lock:
             return self._state
 
+    @property
+    def inspection_session(self) -> Optional[InspectionSession]:
+        """Return the last capture; None when nothing has been analyzed."""
+        with self._lock:
+            return self._session
+
+    def store_inspection_session(self, session: InspectionSession) -> None:
+        with self._lock:
+            self._session = session
+
+    def clear_session(self) -> None:
+        """Drop the stored capture without unloading the current model."""
+        with self._lock:
+            self._session = None
+
     def _clear_unlocked(self) -> None:
         self._state = None
+        self._session = None
         self._session_clearer()
         self._collector()
 
@@ -377,10 +515,18 @@ def analyze_prompt_callback(prompt, manager: ModelManager):
         with manager.use_loaded_state() as state:
             with tf.device(state.device.tf_device):
                 result = analyze_prompt(prompt or "", state.checkpoint)
+        manager.store_inspection_session(
+            InspectionSession(
+                analysis=result,
+                config=state.checkpoint.config,
+            )
+        )
         result = _analysis_success_result(result)
     except (AnalysisError, CheckpointError) as error:
+        manager.clear_session()
         result = _analysis_failure_result(str(error))
     except Exception:
+        manager.clear_session()
         LOGGER.exception("Prompt analysis failed")
         result = _analysis_failure_result(
             "Prompt analysis failed because of an unexpected runtime error."
@@ -391,6 +537,38 @@ def analyze_prompt_callback(prompt, manager: ModelManager):
         result.unknown_warning,
         result.token_rows,
         result.next_token_rows,
+    )
+
+
+def analyze_and_inspect_callback(prompt, manager: ModelManager):
+    """Run analysis and refresh the inspect panel from the same single run."""
+    core = analyze_prompt_callback(prompt, manager)
+    session = manager.inspection_session
+    if session is None:
+        return (*core, *_empty_inspection_outputs())
+    return (*core, *_successful_inspection_outputs(session))
+
+
+def select_location_callback(location_key, token_value, manager: ModelManager):
+    """Re-render the inspect panel from stored data; never reruns the model."""
+    session = manager.inspection_session
+    if session is None:
+        return INSPECT_AWAITING, "", None, render_model_diagram()
+
+    analysis = session.analysis
+    spec = location_spec(location_key or DEFAULT_LOCATION_KEY)
+    last_position = str(analysis.token_count - 1)
+    position = (
+        int(token_value)
+        if token_value is not None and token_value != ""
+        else int(last_position)
+    )
+    values = analysis.capture.locations[spec.key]
+    return (
+        location_explanation(spec),
+        location_stats(spec, values),
+        render_location_heatmap(values, position, spec),
+        render_model_diagram(session.config, selected_key=spec.key),
     )
 
 
@@ -464,8 +642,25 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
                     interactive=False,
                     label="Five most likely next tokens",
                 )
+            gr.Markdown("## Inspect model locations")
+            with gr.Row():
+                location_dropdown = gr.Dropdown(
+                    choices=[],
+                    value=None,
+                    interactive=True,
+                    label="Location",
+                )
+                token_dropdown = gr.Dropdown(
+                    choices=[],
+                    value=None,
+                    interactive=True,
+                    label="Token position",
+                )
+            inspect_explanation = gr.Markdown(INSPECT_AWAITING)
+            inspect_stats = gr.Markdown("")
+            inspect_plot = gr.Plot(label="Activation heatmap")
             analyze_button.click(
-                fn=lambda prompt: analyze_prompt_callback(prompt, manager),
+                fn=lambda prompt: analyze_and_inspect_callback(prompt, manager),
                 inputs=prompt_text,
                 outputs=[
                     analysis_status,
@@ -473,9 +668,29 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
                     unknown_warning,
                     token_table,
                     next_token_table,
+                    location_dropdown,
+                    token_dropdown,
+                    inspect_explanation,
+                    inspect_stats,
+                    inspect_plot,
+                    diagram,
                 ],
                 show_progress="minimal",
             )
+            for dropdown in (location_dropdown, token_dropdown):
+                dropdown.change(
+                    fn=lambda location, token: select_location_callback(
+                        location, token, manager
+                    ),
+                    inputs=[location_dropdown, token_dropdown],
+                    outputs=[
+                        inspect_explanation,
+                        inspect_stats,
+                        inspect_plot,
+                        diagram,
+                    ],
+                    show_progress="minimal",
+                )
     return demo
 
 

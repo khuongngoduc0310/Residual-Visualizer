@@ -130,6 +130,12 @@ class TransformerBlock(layers.Layer):
         )
 
     def call(self, inputs, training=None):
+        steps, attention_scores = self.call_steps(inputs, training)
+        return steps["output_norm"], attention_scores
+
+    def call_steps(self, inputs, training=None):
+        """Run every stage, returning each intermediate named after its
+        diagram stage plus the attention scores."""
         input_shape = tf.shape(inputs)
         batch_size = input_shape[0]
         seq_len = input_shape[1]
@@ -146,8 +152,8 @@ class TransformerBlock(layers.Layer):
             return_attention_scores=True,
             training=training,
         )
-        attention_output = self.dropout_1(attention_output, training=training)
-        attention_residual = inputs + attention_output
+        attention_update = self.dropout_1(attention_output, training=training)
+        attention_residual = inputs + attention_update
         normalized_attention = self.ln_1(attention_residual)
 
         feed_forward_hidden = self.ffn_1(normalized_attention)
@@ -156,8 +162,17 @@ class TransformerBlock(layers.Layer):
             feed_forward_update,
             training=training,
         )
-        output = self.ln_2(normalized_attention + feed_forward_update)
-        return output, attention_scores
+        feed_forward_residual = normalized_attention + feed_forward_update
+        output = self.ln_2(feed_forward_residual)
+        return {
+            "attention_update": attention_update,
+            "attention_residual": attention_residual,
+            "attention_norm": normalized_attention,
+            "ffn_hidden": feed_forward_hidden,
+            "ffn_update": feed_forward_update,
+            "ffn_residual": feed_forward_residual,
+            "output_norm": output,
+        }, attention_scores
 
     def get_config(self):
         config = super().get_config()

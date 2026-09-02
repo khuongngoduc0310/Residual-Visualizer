@@ -268,3 +268,116 @@ def test_create_app_does_not_launch_server():
         "server_name": "127.0.0.1",
         "share": False,
     }
+
+
+def test_analyze_and_inspect_callback_returns_capture_defaults(tmp_path):
+    make_checkpoint(tmp_path)
+    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager.load(str(tmp_path))
+
+    outputs = app.analyze_and_inspect_callback("hello , world", manager)
+
+    assert len(outputs) == 11
+    (status, token_count, warning, token_rows, next_rows,
+     location, token, explanation, stats, plot, diagram) = outputs
+    assert "Analysis complete" in status
+    assert manager.inspection_session is not None
+    assert manager.inspection_session.analysis.token_count == 3
+    assert location["value"] == "output_norm"
+    assert token["value"] == "2"
+    assert "Final block output" in explanation
+    assert "Residual Stream" in explanation
+    assert "3 \u00d7 8" in stats
+    assert isinstance(plot, app.Figure)
+    assert 'class="ct-stage ct-selected" data-stage="output_norm"' in diagram
+    assert 'class="ct-stage" data-stage="ffn_hidden"' in diagram
+
+
+def test_selection_reuses_captured_data_without_running_the_model(tmp_path):
+    make_checkpoint(tmp_path)
+    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager.load(str(tmp_path))
+    app.analyze_prompt_callback("hello , world", manager)
+
+    class ExplodingModel:
+        def __call__(self, *args, **kwargs):
+            raise AssertionError("selection must not run the model")
+
+    checkpoint = manager.loaded_state.checkpoint
+    object.__setattr__(checkpoint, "model", ExplodingModel())
+
+    explanation, stats, plot, diagram = app.select_location_callback(
+        "ffn_hidden", "1", manager
+    )
+
+    assert "FFN hidden activation" in explanation
+    assert "FFN" in explanation
+    assert "3 \u00d7 8" in stats
+    assert isinstance(plot, app.Figure)
+    assert 'class="ct-stage ct-selected" data-stage="ffn_hidden"' in diagram
+
+
+def test_selection_can_switch_back_to_the_default_location(tmp_path):
+    make_checkpoint(tmp_path)
+    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager.load(str(tmp_path))
+    app.analyze_prompt_callback("hello , world", manager)
+
+    explanation, _, _, diagram = app.select_location_callback(
+        "output_norm", "0", manager
+    )
+
+    assert "Final block output" in explanation
+    assert 'class="ct-stage ct-selected" data-stage="output_norm"' in diagram
+
+
+def test_selection_before_analysis_reports_awaiting_state(tmp_path):
+    make_checkpoint(tmp_path)
+    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager.load(str(tmp_path))
+
+    explanation, stats, plot, diagram = app.select_location_callback(
+        "output_norm", "0", manager
+    )
+
+    assert explanation == app.INSPECT_AWAITING
+    assert stats == ""
+    assert plot is None
+    assert "ct-selected" not in diagram
+
+
+def test_failed_analysis_clears_the_stored_capture(tmp_path):
+    make_checkpoint(tmp_path)
+    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager.load(str(tmp_path))
+    app.analyze_prompt_callback("hello , world", manager)
+    assert manager.inspection_session is not None
+
+    outputs = app.analyze_and_inspect_callback("   ", manager)
+
+    assert "Enter a prompt first" in outputs[0]
+    assert manager.inspection_session is None
+    assert outputs[5]["choices"] == []
+    assert outputs[5]["value"] is None
+    assert outputs[6]["choices"] == []
+    assert outputs[7] == app.INSPECT_AWAITING
+    assert outputs[8] == ""
+    assert outputs[9] is None
+    assert "ct-selected" not in outputs[10]
+
+
+def test_loading_a_new_checkpoint_clears_the_stored_capture(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    make_checkpoint(first, seed=1)
+    make_checkpoint(second, seed=2)
+    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager.load(str(first))
+    app.analyze_prompt_callback("hello , world", manager)
+    assert manager.inspection_session is not None
+
+    manager.load(str(second))
+
+    assert manager.inspection_session is None

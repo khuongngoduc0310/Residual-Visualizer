@@ -84,6 +84,36 @@ next tokens are listed with their IDs and four-decimal probabilities, honestly
 labeling the padding and unknown tokens when they appear. Results stay in
 memory for the session only and are never written to disk.
 
+## Inspect Internal Locations
+
+The same Analyze Prompt run also captures every internal tensor of the model,
+so you can move through the block without running inference again. Dropout is
+disabled during this run, so repeated runs are deterministic. The captured
+locations are:
+
+| Location | Category |
+| --- | --- |
+| Token + position embeddings | Residual Stream |
+| Attention update | Attention |
+| Attention residual sum | Residual Stream |
+| First normalized output | Residual Stream |
+| FFN hidden activation | FFN |
+| FFN update | FFN |
+| FFN residual sum | Residual Stream |
+| Final block output | Residual Stream |
+
+After a successful analysis, the **Location** and **Token position** selectors
+are filled in and default to the **Final block output** of the last processed
+prompt token. The model diagram highlights the selected location, a short
+plain-language explanation describes what the tensor contains, and a heatmap
+shows its values across token positions and dimensions. Changing either
+selector re-renders from the captured data only and never runs the model
+again.
+
+Captured tensors live in memory for the session only. They are cleared when a
+new checkpoint is loaded, replaced by a fresh analysis, or dropped after a
+failed analysis.
+
 ## Checkpoint Folder
 
 Each checkpoint is one folder containing exactly these generated files:

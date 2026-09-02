@@ -1,9 +1,11 @@
 from dataclasses import dataclass
 from typing import List, Tuple
 
+import numpy as np
 import tensorflow as tf
 
 from checkpoint import LoadedCheckpoint
+from inspection import CapturedRun, InspectionError, capture_locations
 from preprocess import (
     PADDING_TOKEN_ID,
     UNKNOWN_TOKEN_ID,
@@ -41,6 +43,7 @@ class PromptAnalysis:
     unknown_count: int
     max_len: int
     next_tokens: Tuple[NextToken, ...]
+    capture: CapturedRun
 
 
 def display_text(token_id: int, vocabulary: List[str]) -> str:
@@ -61,22 +64,20 @@ def analyze_prompt(prompt: str, checkpoint: LoadedCheckpoint) -> PromptAnalysis:
     vectorizer = build_text_vectorizer(vocabulary=vocabulary)
     ids = tf.cast(vectorizer(tf.constant([processed])), tf.int32)[0]
 
-    token_count = int(tf.size(ids))
-    if token_count == 0:
-        raise AnalysisError("Prompt does not contain any tokens.")
-    if token_count > checkpoint.config.max_len:
-        raise AnalysisError(
-            f"Prompt has {token_count} tokens; the model accepts at most "
-            f"{checkpoint.config.max_len}."
-        )
+    try:
+        captured = capture_locations(checkpoint, ids)
+    except InspectionError as error:
+        raise AnalysisError(str(error)) from error
+    token_count = captured.token_count
 
     unknown_count = int(
         tf.reduce_sum(tf.cast(tf.equal(ids, UNKNOWN_TOKEN_ID), tf.int32))
     )
 
-    probabilities = checkpoint.model(ids[None, :], training=False)[0, -1, :]
+    probabilities = captured.probabilities[-1]
     top_k = min(NEXT_TOKEN_COUNT, checkpoint.config.vocab_size)
-    values, indices = tf.math.top_k(probabilities, k=top_k)
+    top_indices = np.argsort(-probabilities)[:top_k]
+    sorted_probabilities = probabilities[top_indices]
 
     tokens = tuple(
         TokenInfo(
@@ -94,7 +95,7 @@ def analyze_prompt(prompt: str, checkpoint: LoadedCheckpoint) -> PromptAnalysis:
             probability=float(probability),
         )
         for rank, (probability, token_id) in enumerate(
-            zip(values.numpy(), indices.numpy()),
+            zip(sorted_probabilities, top_indices),
             start=1,
         )
     )
@@ -104,4 +105,5 @@ def analyze_prompt(prompt: str, checkpoint: LoadedCheckpoint) -> PromptAnalysis:
         unknown_count=unknown_count,
         max_len=checkpoint.config.max_len,
         next_tokens=next_tokens,
+        capture=captured,
     )

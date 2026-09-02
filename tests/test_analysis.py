@@ -4,6 +4,7 @@ import tensorflow as tf
 
 from analysis import AnalysisError, analyze_prompt, display_text
 from checkpoint import load_checkpoint, save_checkpoint
+from inspection import LOCATION_KEYS, capture_locations
 from model import ModelConfig, build_model
 from preprocess import PADDING_TOKEN_ID
 
@@ -113,4 +114,29 @@ def test_analysis_is_deterministic(loaded_checkpoint):
     ]
     assert [token.probability for token in first.next_tokens] == pytest.approx(
         [token.probability for token in second.next_tokens]
+    )
+
+
+def test_analysis_captures_every_location_in_the_same_run(loaded_checkpoint):
+    analysis = analyze_prompt("hello , world !", loaded_checkpoint)
+    ids = tf.constant(
+        [[token.token_id for token in analysis.tokens]],
+        dtype=tf.int32,
+    )[0]
+    direct = capture_locations(loaded_checkpoint, ids)
+
+    assert set(analysis.capture.locations) == set(LOCATION_KEYS)
+    assert analysis.capture.token_count == analysis.token_count
+    for key in LOCATION_KEYS:
+        np.testing.assert_allclose(
+            analysis.capture.locations[key],
+            direct.locations[key],
+            rtol=1e-6,
+            atol=1e-7,
+        )
+    np.testing.assert_allclose(
+        analysis.capture.probabilities,
+        direct.probabilities,
+        rtol=1e-6,
+        atol=1e-7,
     )
