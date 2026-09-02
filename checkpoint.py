@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List
 
 import h5py
+import keras
 import tensorflow as tf
 from tensorflow.keras import Model, layers
 
@@ -24,8 +25,9 @@ from preprocess import (
 )
 
 
-CHECKPOINT_FORMAT_VERSION = 1
-SUPPORTED_TENSORFLOW_MINOR = (2, 10)
+CHECKPOINT_FORMAT_VERSION = 2
+SUPPORTED_TENSORFLOW_VERSION = "2.20.0"
+SUPPORTED_KERAS_VERSION = "3.13.2"
 WEIGHTS_FILENAME = "model.weights.h5"
 VOCABULARY_FILENAME = "vocabulary.json"
 CONFIG_FILENAME = "config.json"
@@ -62,7 +64,7 @@ def save_checkpoint(
     vocabulary: List[str],
     config: ModelConfig,
 ) -> None:
-    _require_supported_tensorflow(tf.__version__, "Current TensorFlow version")
+    _require_supported_runtime("Current runtime")
     try:
         validate_vocabulary(vocabulary)
     except ValueError as error:
@@ -81,6 +83,7 @@ def save_checkpoint(
         "format_version": CHECKPOINT_FORMAT_VERSION,
         "architecture": ARCHITECTURE_NAME,
         "tensorflow_version": tf.__version__,
+        "keras_version": keras.__version__,
         "model": config.to_dict(),
         "tokenizer": TOKENIZER_SETTINGS,
     }
@@ -92,7 +95,7 @@ def save_checkpoint(
 
 
 def load_checkpoint(directory) -> LoadedCheckpoint:
-    _require_supported_tensorflow(tf.__version__, "Current TensorFlow version")
+    _require_supported_runtime("Current runtime")
     checkpoint_directory = Path(directory)
     if not checkpoint_directory.is_dir():
         raise CheckpointError(
@@ -144,6 +147,7 @@ def _parse_config(document) -> ModelConfig:
         "format_version",
         "architecture",
         "tensorflow_version",
+        "keras_version",
         "model",
         "tokenizer",
     }
@@ -168,6 +172,10 @@ def _parse_config(document) -> ModelConfig:
     _require_supported_tensorflow(
         saved_tensorflow_version,
         "Checkpoint TensorFlow version",
+    )
+    _require_supported_keras(
+        document.get("keras_version"),
+        "Checkpoint Keras version",
     )
     if document.get("tokenizer") != TOKENIZER_SETTINGS:
         raise CheckpointError("Tokenizer settings do not match this app")
@@ -205,6 +213,11 @@ def _validate_model(model: Model, config: ModelConfig) -> None:
             "The embedding and output vocabulary sizes do not match"
         )
     attention_config = transformer.attn.get_config()
+    attention_output_shape = attention_config["output_shape"]
+    if isinstance(attention_output_shape, (list, tuple)):
+        if len(attention_output_shape) != 1:
+            raise CheckpointError("The attention output shape does not match config")
+        attention_output_shape = attention_output_shape[0]
     if (
         embedding.vocab_size != embedding.token_emb.input_dim
         or embedding.embed_dim != embedding.token_emb.output_dim
@@ -212,7 +225,7 @@ def _validate_model(model: Model, config: ModelConfig) -> None:
         or embedding.embed_dim != embedding.pos_emb.output_dim
         or transformer.num_heads != attention_config["num_heads"]
         or transformer.key_dim != attention_config["key_dim"]
-        or transformer.embed_dim != attention_config["output_shape"]
+        or transformer.embed_dim != attention_output_shape
         or transformer.ff_dim != transformer.ffn_1.units
         or transformer.embed_dim != transformer.ffn_2.units
     ):
@@ -314,18 +327,21 @@ def _validate_checkpoint_digest(path: Path, document, vocabulary) -> None:
         )
 
 
-def _tensorflow_minor(version):
-    if not isinstance(version, str):
-        return None
-    try:
-        major, minor = version.split(".", maxsplit=2)[:2]
-        return int(major), int(minor)
-    except (TypeError, ValueError):
-        return None
-
-
 def _require_supported_tensorflow(version, description):
-    if _tensorflow_minor(version) != SUPPORTED_TENSORFLOW_MINOR:
+    if version != SUPPORTED_TENSORFLOW_VERSION:
         raise CheckpointError(
-            f"{description} must be TensorFlow 2.10; found {version}"
+            f"{description} must be TensorFlow {SUPPORTED_TENSORFLOW_VERSION}; "
+            f"found {version}"
         )
+
+
+def _require_supported_keras(version, description):
+    if version != SUPPORTED_KERAS_VERSION:
+        raise CheckpointError(
+            f"{description} must be Keras {SUPPORTED_KERAS_VERSION}; found {version}"
+        )
+
+
+def _require_supported_runtime(description):
+    _require_supported_tensorflow(tf.__version__, f"{description} TensorFlow version")
+    _require_supported_keras(keras.__version__, f"{description} Keras version")

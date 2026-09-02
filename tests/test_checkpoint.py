@@ -6,6 +6,9 @@ import tensorflow as tf
 
 from checkpoint import (
     CONFIG_FILENAME,
+    CHECKPOINT_FORMAT_VERSION,
+    SUPPORTED_KERAS_VERSION,
+    SUPPORTED_TENSORFLOW_VERSION,
     VOCABULARY_FILENAME,
     WEIGHTS_FILENAME,
     CheckpointError,
@@ -59,6 +62,13 @@ def test_checkpoint_round_trip_preserves_predictions_and_token_ids(tmp_path):
     assert loaded.vocabulary == VOCABULARY
     np.testing.assert_allclose(expected, actual, rtol=1e-6, atol=1e-7)
 
+    document = json.loads(
+        (tmp_path / CONFIG_FILENAME).read_text(encoding="utf-8")
+    )
+    assert document["format_version"] == CHECKPOINT_FORMAT_VERSION
+    assert document["tensorflow_version"] == SUPPORTED_TENSORFLOW_VERSION
+    assert document["keras_version"] == SUPPORTED_KERAS_VERSION
+
     original_vectorizer = build_text_vectorizer(vocabulary=VOCABULARY)
     loaded_vectorizer = build_text_vectorizer(vocabulary=loaded.vocabulary)
     text = pad_punctuation("HELLO, missing world!")
@@ -70,6 +80,28 @@ def test_checkpoint_round_trip_preserves_predictions_and_token_ids(tmp_path):
 
 def test_load_refuses_missing_checkpoint_file(tmp_path):
     with pytest.raises(CheckpointError, match="Missing checkpoint file"):
+        load_checkpoint(tmp_path)
+
+
+def test_load_refuses_an_older_checkpoint_format(tmp_path):
+    save_tiny_checkpoint(tmp_path)
+    config_path = tmp_path / CONFIG_FILENAME
+    document = json.loads(config_path.read_text(encoding="utf-8"))
+    document["format_version"] = 1
+    config_path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(CheckpointError, match="Unsupported checkpoint format"):
+        load_checkpoint(tmp_path)
+
+
+def test_load_refuses_a_checkpoint_from_another_keras_version(tmp_path):
+    save_tiny_checkpoint(tmp_path)
+    config_path = tmp_path / CONFIG_FILENAME
+    document = json.loads(config_path.read_text(encoding="utf-8"))
+    document["keras_version"] = "3.12.0"
+    config_path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(CheckpointError, match="Checkpoint Keras version"):
         load_checkpoint(tmp_path)
 
 

@@ -6,24 +6,40 @@ format used by both Google Colab training and the local inspection app.
 
 ## Supported Environment
 
-- 64-bit Python 3.10
-- TensorFlow 2.10.1
-- Native Windows GPU: CUDA 11.2 and cuDNN 8.1
-- CPU fallback when the CUDA libraries are unavailable
+- 64-bit Python 3.13.15
+- TensorFlow 2.20.0
+- Keras 3.13.2
+- NumPy 2.1.3
+- h5py 3.16.0
+- protobuf 5.29.6
+- WSL2/Linux with an NVIDIA driver for GPU inference
 
-Select the project Python with pyenv and create an isolated environment:
+TensorFlow 2.20 does not provide native-Windows NVIDIA GPU support. Native
+Windows can be used for CPU-only checks; use WSL2 for the local GPU app.
 
-```powershell
-pyenv local 3.10.11
+Inside WSL2, select the project Python with pyenv and create an isolated
+environment:
+
+```bash
+pyenv local 3.13.15
 python -m venv .venv
-& ".venv\Scripts\python.exe" -m pip install -r requirements-dev.txt
+source .venv/bin/activate
+python -m pip install -r requirements-gpu.txt
 ```
 
-Run the checks with:
+Verify the NVIDIA and TensorFlow GPU paths:
 
-```powershell
-& ".venv\Scripts\python.exe" -m pip check
-& ".venv\Scripts\python.exe" -m pytest
+```bash
+nvidia-smi
+python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
+```
+
+For CPU-only development, install `requirements-dev.txt` instead. Run the
+checks with:
+
+```bash
+python -m pip check
+python -m pytest
 ```
 
 ## Checkpoint Folder
@@ -38,21 +54,32 @@ config.json
 
 `vocabulary.json` keeps every token in its original order. The empty padding
 token is entry 0 and `[UNK]` is entry 1. `config.json` records the architecture,
-TensorFlow version, model sizes, and text-processing settings. The loader
-refuses incomplete or inconsistent folders rather than loading uncertain data.
+TensorFlow and Keras versions, model sizes, and text-processing settings. The
+loader refuses incomplete or inconsistent folders rather than loading uncertain
+data.
 
 ## Colab Training And Export
 
-Use the repository version of the model instead of copying the model classes
-into the notebook. Clone the repository and import from that checkout:
+Use the standard hosted Colab runtime. It currently provides Python 3.13.15 and
+the exact package versions used by the checkpoint contract. Clone the
+repository and import from that checkout instead of copying model classes into
+the notebook:
 
 ```python
 !git clone https://github.com/khuongngoduc0310/Residual-Visualizer.git
 %cd Residual-Visualizer
 
 import tensorflow as tf
+import keras
+import numpy as np
+import h5py
+import google.protobuf
 
-assert tf.__version__.startswith("2.10."), tf.__version__
+assert tf.__version__ == "2.20.0", tf.__version__
+assert keras.__version__ == "3.13.2", keras.__version__
+assert np.__version__ == "2.1.3", np.__version__
+assert h5py.__version__ == "3.16.0", h5py.__version__
+assert google.protobuf.__version__ == "5.29.6", google.protobuf.__version__
 
 from checkpoint import save_checkpoint
 from model import ModelConfig, build_model, compile_for_training
@@ -123,6 +150,15 @@ save_checkpoint(
 Export to a new or empty folder. The helper refuses to overwrite an existing
 checkpoint, preventing a failed export from mixing old and new files.
 
-The checkpoint must be exported with TensorFlow 2.10. A checkpoint produced by
-a different TensorFlow minor version is rejected because weight compatibility
-is not guaranteed.
+The checkpoint must be exported with TensorFlow 2.20.0 and Keras 3.13.2. A
+checkpoint produced by another runtime is rejected because weight
+compatibility is not guaranteed. The format version is incremented when this
+runtime contract changes, so older TensorFlow 2.10 checkpoints are rejected.
+
+## Notebook
+
+Run `notebook/compact_gpt_retrain_2.ipynb` in standard hosted Colab with a GPU
+runtime. The notebook clones the repository, verifies the runtime versions,
+trains the shared model, reloads the exported checkpoint, compares predictions
+before and after loading, and downloads a ZIP containing the three checkpoint
+files.
