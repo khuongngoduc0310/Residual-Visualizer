@@ -68,6 +68,22 @@ details. If the replacement fails, no model remains active. TensorFlow may keep
 reserved GPU memory until the process exits even after the old model is
 released.
 
+## Analyze A Prompt
+
+After loading a checkpoint, enter text in **Prompt** and press **Analyze
+Prompt**. The prompt is processed exactly like training text: lowercased,
+punctuation separated by spaces, and split on whitespace using the saved
+vocabulary. The page shows every processed token with its 0-based position,
+text, and numeric token ID, plus the processed token count against the model's
+maximum sequence length.
+
+Empty prompts and prompts longer than the model maximum are rejected rather
+than silently shortened. Tokens missing from the vocabulary remain allowed and
+are shown as `[UNK]` with a visible warning and count. The five most likely
+next tokens are listed with their IDs and four-decimal probabilities, honestly
+labeling the padding and unknown tokens when they appear. Results stay in
+memory for the session only and are never written to disk.
+
 ## Checkpoint Folder
 
 Each checkpoint is one folder containing exactly these generated files:

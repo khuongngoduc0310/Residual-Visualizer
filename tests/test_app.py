@@ -1,4 +1,5 @@
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -204,6 +205,59 @@ def test_cpu_device_does_not_claim_cuda(monkeypatch):
     assert not device.is_gpu
     assert device.tf_device == "/CPU:0"
     assert device.label == "CPU"
+
+
+def test_analyze_without_model_reports_and_clears():
+    manager = app.ModelManager(device_detector=lambda: fake_device())
+
+    status, token_count, warning, token_rows, next_token_rows = (
+        app.analyze_prompt_callback("hello", manager)
+    )
+
+    assert "Load a checkpoint" in status
+    assert token_count == ""
+    assert warning == ""
+    assert token_rows == []
+    assert next_token_rows == []
+
+
+def test_analyze_callback_renders_token_and_prediction_tables(tmp_path):
+    make_checkpoint(tmp_path)
+    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager.load(str(tmp_path))
+
+    status, token_count, warning, token_rows, next_token_rows = (
+        app.analyze_prompt_callback("hello , world", manager)
+    )
+
+    assert "Analysis complete" in status
+    assert token_count == "**Processed tokens:** `3` of `6`"
+    assert warning == ""
+    assert [row[:3] for row in token_rows] == [
+        [0, "hello", 2],
+        [1, ",", 3],
+        [2, "world", 4],
+    ]
+    assert len(next_token_rows) == 5
+    assert all(len(row) == 4 for row in next_token_rows)
+    assert all(re.fullmatch(r"\d\.\d{4}", row[3]) for row in next_token_rows)
+
+
+def test_failed_analysis_clears_previous_results(tmp_path):
+    make_checkpoint(tmp_path)
+    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager.load(str(tmp_path))
+    app.analyze_prompt_callback("hello , world", manager)
+
+    status, token_count, warning, token_rows, next_token_rows = (
+        app.analyze_prompt_callback("   ", manager)
+    )
+
+    assert "Enter a prompt first" in status
+    assert token_count == ""
+    assert warning == ""
+    assert token_rows == []
+    assert next_token_rows == []
 
 
 def test_create_app_does_not_launch_server():

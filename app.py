@@ -10,6 +10,7 @@ from typing import Callable, Iterator, Optional
 import gradio as gr
 import tensorflow as tf
 
+from analysis import AnalysisError, PromptAnalysis, analyze_prompt
 from checkpoint import CheckpointError, LoadedCheckpoint, load_checkpoint
 from model import ARCHITECTURE_NAME, ModelConfig
 
@@ -106,6 +107,16 @@ class LoadResult:
     device: str
     diagram: str
     summary: str
+
+
+@dataclass(frozen=True)
+class AnalysisResult:
+    success: bool
+    status: str
+    token_count: str
+    token_rows: list
+    unknown_warning: str
+    next_token_rows: list
 
 
 def detect_compute_device() -> ComputeDevice:
@@ -242,6 +253,43 @@ def _failure_result(message: str) -> LoadResult:
     )
 
 
+def _analysis_success_result(analysis: PromptAnalysis) -> AnalysisResult:
+    unknown_warning = (
+        f"**Warning:** this prompt contains `{analysis.unknown_count}` "
+        "unknown token(s), mapped to `[UNK]`."
+        if analysis.unknown_count
+        else ""
+    )
+    return AnalysisResult(
+        success=True,
+        status=f"Analysis complete for `{analysis.token_count}` processed token(s).",
+        token_count=(
+            f"**Processed tokens:** `{analysis.token_count}` of "
+            f"`{analysis.max_len}`"
+        ),
+        token_rows=[
+            [token.position, token.text, token.token_id]
+            for token in analysis.tokens
+        ],
+        unknown_warning=unknown_warning,
+        next_token_rows=[
+            [token.rank, token.text, token.token_id, f"{token.probability:.4f}"]
+            for token in analysis.next_tokens
+        ],
+    )
+
+
+def _analysis_failure_result(message: str) -> AnalysisResult:
+    return AnalysisResult(
+        success=False,
+        status=message,
+        token_count="",
+        token_rows=[],
+        unknown_warning="",
+        next_token_rows=[],
+    )
+
+
 class ModelManager:
     """Own the single server-side checkpoint used by the application."""
 
@@ -324,6 +372,28 @@ def load_model_callback(directory, manager: ModelManager):
     )
 
 
+def analyze_prompt_callback(prompt, manager: ModelManager):
+    try:
+        with manager.use_loaded_state() as state:
+            with tf.device(state.device.tf_device):
+                result = analyze_prompt(prompt or "", state.checkpoint)
+        result = _analysis_success_result(result)
+    except (AnalysisError, CheckpointError) as error:
+        result = _analysis_failure_result(str(error))
+    except Exception:
+        LOGGER.exception("Prompt analysis failed")
+        result = _analysis_failure_result(
+            "Prompt analysis failed because of an unexpected runtime error."
+        )
+    return (
+        result.status,
+        result.token_count,
+        result.unknown_warning,
+        result.token_rows,
+        result.next_token_rows,
+    )
+
+
 def launch_kwargs() -> dict:
     return {
         "server_name": LOCAL_SERVER_NAME,
@@ -368,6 +438,42 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
                 fn=lambda directory: load_model_callback(directory, manager),
                 inputs=checkpoint_folder,
                 outputs=[status, metadata, device, diagram, summary],
+                show_progress="minimal",
+            )
+            gr.Markdown("## Analyze a prompt")
+            prompt_text = gr.Textbox(
+                label="Prompt",
+                lines=3,
+                placeholder="Enter text to analyze with the loaded model.",
+            )
+            analyze_button = gr.Button("Analyze Prompt", variant="primary")
+            analysis_status = gr.Markdown(
+                "Load a model, enter a prompt, and press Analyze Prompt.",
+                elem_classes="ct-status",
+            )
+            token_count_line = gr.Markdown("")
+            unknown_warning = gr.Markdown("")
+            with gr.Row():
+                token_table = gr.Dataframe(
+                    headers=["Position", "Token", "ID"],
+                    interactive=False,
+                    label="Prompt tokens",
+                )
+                next_token_table = gr.Dataframe(
+                    headers=["Rank", "Token", "ID", "Probability"],
+                    interactive=False,
+                    label="Five most likely next tokens",
+                )
+            analyze_button.click(
+                fn=lambda prompt: analyze_prompt_callback(prompt, manager),
+                inputs=prompt_text,
+                outputs=[
+                    analysis_status,
+                    token_count_line,
+                    unknown_warning,
+                    token_table,
+                    next_token_table,
+                ],
                 show_progress="minimal",
             )
     return demo
