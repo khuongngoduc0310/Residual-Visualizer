@@ -147,6 +147,16 @@ def test_location_specs_have_categories_and_explanations():
         "ffn_residual": RESIDUAL_STREAM,
         "output_norm": RESIDUAL_STREAM,
     }
+    assert {spec.key: spec.normalized for spec in LOCATIONS} == {
+        "embedding": False,
+        "attention_update": False,
+        "attention_residual": False,
+        "attention_norm": True,
+        "ffn_hidden": False,
+        "ffn_update": False,
+        "ffn_residual": False,
+        "output_norm": True,
+    }
 
 
 def test_location_choices_are_labeled_and_ordered():

@@ -105,10 +105,19 @@ locations are:
 After a successful analysis, the **Location** and **Token position** selectors
 are filled in and default to the **Final block output** of the last processed
 prompt token. The model diagram highlights the selected location, a short
-plain-language explanation describes what the tensor contains, and a heatmap
-shows its values across token positions and dimensions. Changing either
-selector re-renders from the captured data only and never runs the model
+plain-language explanation describes what the tensor contains, and three
+coordinated Plotly views show token magnitudes, the token-by-dimension tensor,
+and the selected token's dimension distribution. Token labels include their
+positions, so repeated text remains distinguishable. Click a token-magnitude
+bar or use the position-aware selector to change the selected token. Changing
+either selector re-renders from the captured data only and never runs the model
 again.
+
+The heatmap reports its visible zero-centered range. The optional percentile
+clipping control changes only the displayed color bounds; captured values and
+the distribution remain unchanged. Normalized locations explain that their
+token magnitudes may appear nearly flat because layer normalization fixes the
+feature scale.
 
 Captured tensors live in memory for the session only. They are cleared when a
 new checkpoint is loaded, replaced by a fresh analysis, or dropped after a

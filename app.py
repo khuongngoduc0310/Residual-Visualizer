@@ -7,17 +7,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
-import matplotlib
 import numpy as np
 import tensorflow as tf
-
-matplotlib.use("Agg")
-from matplotlib import pyplot as plt
-from matplotlib.figure import Figure
 
 import gradio as gr
 
 from analysis import AnalysisError, PromptAnalysis, analyze_prompt
+from charts import (
+    display_bounds,
+    render_activation_heatmap,
+    render_token_distribution,
+    render_token_magnitudes,
+    tensor_statistics,
+)
 from checkpoint import CheckpointError, LoadedCheckpoint, load_checkpoint
 from inspection import (
     DEFAULT_LOCATION_KEY,
@@ -332,51 +334,61 @@ def location_explanation(spec) -> str:
     )
 
 
-def location_stats(spec, values: np.ndarray) -> str:
-    """Markdown line describing the captured tensor's shape and spread."""
+def location_stats(spec, values: np.ndarray, token_position: int) -> str:
+    """Markdown lines describing the captured tensor and selected token."""
     seq_len, width = values.shape
+    stats = tensor_statistics(values[token_position])
     return (
         f"**Shape:** `{seq_len} \u00d7 {width}`\n"
-        f"**Range:** min `{values.min():.4f}`, mean `{values.mean():.4f}`, "
-        f"max `{values.max():.4f}`"
+        f"**Captured range:** min `{values.min():.4f}`, mean `{values.mean():.4f}`, "
+        f"max `{values.max():.4f}`\n"
+        f"**Selected token:** norm `{stats.norm:.4f}`, mean `{stats.mean:.4f}`, "
+        f"std `{stats.standard_deviation:.4f}`, min `{stats.minimum:.4f}`, "
+        f"max `{stats.maximum:.4f}`"
     )
 
 
-def render_location_heatmap(
-    values: np.ndarray,
-    token_position: int,
-    spec,
-) -> Figure:
-    """Render one captured location as a positions-by-dimensions heatmap."""
-    seq_len, width = values.shape
-    figure, axis = plt.subplots(figsize=(max(7.0, seq_len * 0.5), 4.8))
-    image = axis.imshow(
-        values.T,
-        aspect="auto",
-        cmap="viridis",
-        interpolation="nearest",
-    )
-    figure.colorbar(image, ax=axis, label="value")
-    axis.set_title(f"{spec.label} \u2014 {spec.category}")
-    axis.set_xlabel("token position")
-    axis.set_ylabel("dimension")
-    axis.set_xticks(range(seq_len))
-    axis.set_xticklabels([str(position) for position in range(seq_len)])
-    if 0 <= token_position < seq_len:
-        axis.axvspan(
-            token_position - 0.5,
-            token_position + 0.5,
-            facecolor="none",
-            edgecolor="#dc2626",
-            linewidth=2.2,
-        )
-    figure.tight_layout()
-    return figure
+def heatmap_range(values: np.ndarray, clipped: bool) -> str:
+    lower, upper = display_bounds(values, clipped)
+    suffix = " (display clipped to the 1st-99th percentile)" if clipped else ""
+    return f"**Visible heatmap range:** `{lower:.4f}` to `{upper:.4f}`{suffix}"
 
 
 INSPECT_AWAITING = (
     "Analyze a prompt to capture every internal location."
 )
+
+CLICK_BRIDGE_JS = """
+() => {
+  const install = () => {
+    const host = document.querySelector('#ct-magnitude-plot');
+    if (!host || host.dataset.clickBridgeInstalled === 'true') return;
+    host.dataset.clickBridgeInstalled = 'true';
+    host.addEventListener('plotly_click', (event) => {
+      const point = event.detail?.points?.[0];
+      const position = point?.customdata ?? point?.pointIndex;
+      const input = document.querySelector(
+        '#ct-token-click input, #ct-token-click textarea'
+      );
+      if (position === undefined || !input) return;
+      const setter = Object.getOwnPropertyDescriptor(
+        input instanceof HTMLTextAreaElement
+          ? HTMLTextAreaElement.prototype
+          : HTMLInputElement.prototype,
+        'value'
+      ).set;
+      setter.call(input, String(position));
+      input.dispatchEvent(new Event('input', {bubbles: true}));
+      input.dispatchEvent(new Event('change', {bubbles: true}));
+    });
+  };
+  install();
+  new MutationObserver(install).observe(document.body, {
+    childList: true,
+    subtree: true,
+  });
+}
+"""
 
 
 def _empty_inspection_outputs():
@@ -386,27 +398,45 @@ def _empty_inspection_outputs():
         empty_dropdown,
         INSPECT_AWAITING,
         "",
+        "",
+        None,
+        None,
         None,
         render_model_diagram(),
     )
 
 
-def _successful_inspection_outputs(session: InspectionSession):
+def _successful_inspection_outputs(
+    session: InspectionSession,
+    location_key: str = DEFAULT_LOCATION_KEY,
+    token_position: Optional[int] = None,
+    clipped: bool = False,
+):
     analysis = session.analysis
-    spec = location_spec(DEFAULT_LOCATION_KEY)
+    spec = location_spec(location_key)
+    token_position = (
+        analysis.token_count - 1
+        if token_position is None
+        else max(0, min(token_position, analysis.token_count - 1))
+    )
     location_dropdown = gr.update(choices=location_choices(), value=spec.key)
     token_dropdown = gr.update(
         choices=_token_choices(analysis),
-        value=str(analysis.token_count - 1),
+        value=str(token_position),
     )
     values = analysis.capture.locations[spec.key]
-    figure = render_location_heatmap(values, analysis.token_count - 1, spec)
+    labels = [f"{token.position}: {token.text}" for token in analysis.tokens]
     return (
         location_dropdown,
         token_dropdown,
         location_explanation(spec),
-        location_stats(spec, values),
-        figure,
+        location_stats(spec, values, token_position),
+        heatmap_range(values, clipped),
+        render_token_magnitudes(values, labels, token_position),
+        render_activation_heatmap(values, labels, token_position, clipped),
+        render_token_distribution(
+            values[token_position], token_position, labels[token_position]
+        ),
         render_model_diagram(session.config, selected_key=spec.key),
     )
 
@@ -549,26 +579,79 @@ def analyze_and_inspect_callback(prompt, manager: ModelManager):
     return (*core, *_successful_inspection_outputs(session))
 
 
-def select_location_callback(location_key, token_value, manager: ModelManager):
+def select_location_callback(
+    location_key,
+    token_value,
+    clipped,
+    manager: ModelManager,
+):
     """Re-render the inspect panel from stored data; never reruns the model."""
     session = manager.inspection_session
     if session is None:
-        return INSPECT_AWAITING, "", None, render_model_diagram()
+        return (
+            gr.update(value=None),
+            INSPECT_AWAITING,
+            "",
+            "",
+            None,
+            None,
+            None,
+            render_model_diagram(),
+        )
 
     analysis = session.analysis
-    spec = location_spec(location_key or DEFAULT_LOCATION_KEY)
-    last_position = str(analysis.token_count - 1)
     position = (
         int(token_value)
         if token_value is not None and token_value != ""
-        else int(last_position)
+        else analysis.token_count - 1
     )
-    values = analysis.capture.locations[spec.key]
+    return _successful_inspection_outputs(
+        session,
+        location_key or DEFAULT_LOCATION_KEY,
+        position,
+        bool(clipped),
+    )[1:]
+
+
+def select_clicked_token_callback(
+    clicked_position,
+    location_key,
+    token_value,
+    clipped,
+    manager: ModelManager,
+):
+    """Apply a Plotly bar click, then render all views from captured data."""
+    session = manager.inspection_session
+    if session is None:
+        return (
+            gr.update(value=None),
+            INSPECT_AWAITING,
+            "",
+            "",
+            None,
+            None,
+            None,
+            render_model_diagram(),
+        )
+    try:
+        position = int(clicked_position)
+    except (TypeError, ValueError):
+        position = int(token_value) if token_value not in (None, "") else None
+    outputs = _successful_inspection_outputs(
+        session,
+        location_key or DEFAULT_LOCATION_KEY,
+        position,
+        bool(clipped),
+    )
     return (
-        location_explanation(spec),
-        location_stats(spec, values),
-        render_location_heatmap(values, position, spec),
-        render_model_diagram(session.config, selected_key=spec.key),
+        outputs[1],
+        outputs[2],
+        outputs[3],
+        outputs[4],
+        outputs[5],
+        outputs[6],
+        outputs[7],
+        outputs[8],
     )
 
 
@@ -658,7 +741,23 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
                 )
             inspect_explanation = gr.Markdown(INSPECT_AWAITING)
             inspect_stats = gr.Markdown("")
-            inspect_plot = gr.Plot(label="Activation heatmap")
+            heatmap_clip = gr.Checkbox(
+                label="Clip heatmap display to the 1st-99th percentile",
+                value=False,
+            )
+            inspect_range = gr.Markdown("")
+            with gr.Row():
+                magnitude_plot = gr.Plot(
+                    label="Token magnitudes",
+                    elem_id="ct-magnitude-plot",
+                )
+                distribution_plot = gr.Plot(label="Selected token distribution")
+            heatmap_plot = gr.Plot(label="Token-by-dimension activation heatmap")
+            token_click = gr.Textbox(
+                value="",
+                visible=False,
+                elem_id="ct-token-click",
+            )
             analyze_button.click(
                 fn=lambda prompt: analyze_and_inspect_callback(prompt, manager),
                 inputs=prompt_text,
@@ -672,30 +771,54 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
                     token_dropdown,
                     inspect_explanation,
                     inspect_stats,
-                    inspect_plot,
+                    inspect_range,
+                    magnitude_plot,
+                    heatmap_plot,
+                    distribution_plot,
                     diagram,
                 ],
                 show_progress="minimal",
             )
+            selection_outputs = [
+                token_dropdown,
+                inspect_explanation,
+                inspect_stats,
+                inspect_range,
+                magnitude_plot,
+                heatmap_plot,
+                distribution_plot,
+                diagram,
+            ]
             for dropdown in (location_dropdown, token_dropdown):
                 dropdown.change(
-                    fn=lambda location, token: select_location_callback(
-                        location, token, manager
+                    fn=lambda location, token, clipped: select_location_callback(
+                        location, token, clipped, manager
                     ),
-                    inputs=[location_dropdown, token_dropdown],
-                    outputs=[
-                        inspect_explanation,
-                        inspect_stats,
-                        inspect_plot,
-                        diagram,
-                    ],
+                    inputs=[location_dropdown, token_dropdown, heatmap_clip],
+                    outputs=selection_outputs,
                     show_progress="minimal",
                 )
+            heatmap_clip.change(
+                fn=lambda location, token, clipped: select_location_callback(
+                    location, token, clipped, manager
+                ),
+                inputs=[location_dropdown, token_dropdown, heatmap_clip],
+                outputs=selection_outputs,
+                show_progress="minimal",
+            )
+            token_click.change(
+                fn=lambda clicked, location, token, clipped: select_clicked_token_callback(
+                    clicked, location, token, clipped, manager
+                ),
+                inputs=[token_click, location_dropdown, token_dropdown, heatmap_clip],
+                outputs=selection_outputs,
+                show_progress="minimal",
+            )
     return demo
 
 
 def main() -> None:
-    create_app().launch(css=APP_CSS, **launch_kwargs())
+    create_app().launch(css=APP_CSS, js=CLICK_BRIDGE_JS, **launch_kwargs())
 
 
 if __name__ == "__main__":

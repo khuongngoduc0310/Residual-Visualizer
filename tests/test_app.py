@@ -3,6 +3,7 @@ import re
 from types import SimpleNamespace
 
 import pytest
+import plotly.graph_objects as go
 import tensorflow as tf
 
 import app
@@ -277,9 +278,10 @@ def test_analyze_and_inspect_callback_returns_capture_defaults(tmp_path):
 
     outputs = app.analyze_and_inspect_callback("hello , world", manager)
 
-    assert len(outputs) == 11
+    assert len(outputs) == 14
     (status, token_count, warning, token_rows, next_rows,
-     location, token, explanation, stats, plot, diagram) = outputs
+     location, token, explanation, stats, visible_range,
+     magnitude_plot, heatmap_plot, distribution_plot, diagram) = outputs
     assert "Analysis complete" in status
     assert manager.inspection_session is not None
     assert manager.inspection_session.analysis.token_count == 3
@@ -288,7 +290,10 @@ def test_analyze_and_inspect_callback_returns_capture_defaults(tmp_path):
     assert "Final block output" in explanation
     assert "Residual Stream" in explanation
     assert "3 \u00d7 8" in stats
-    assert isinstance(plot, app.Figure)
+    assert "Visible heatmap range" in visible_range
+    assert isinstance(magnitude_plot, go.Figure)
+    assert isinstance(heatmap_plot, go.Figure)
+    assert isinstance(distribution_plot, go.Figure)
     assert 'class="ct-stage ct-selected" data-stage="output_norm"' in diagram
     assert 'class="ct-stage" data-stage="ffn_hidden"' in diagram
 
@@ -306,14 +311,17 @@ def test_selection_reuses_captured_data_without_running_the_model(tmp_path):
     checkpoint = manager.loaded_state.checkpoint
     object.__setattr__(checkpoint, "model", ExplodingModel())
 
-    explanation, stats, plot, diagram = app.select_location_callback(
-        "ffn_hidden", "1", manager
+    _, explanation, stats, visible_range, magnitude, heatmap, distribution, diagram = app.select_location_callback(
+        "ffn_hidden", "1", False, manager
     )
 
     assert "FFN hidden activation" in explanation
     assert "FFN" in explanation
     assert "3 \u00d7 8" in stats
-    assert isinstance(plot, app.Figure)
+    assert "Visible heatmap range" in visible_range
+    assert isinstance(magnitude, go.Figure)
+    assert isinstance(heatmap, go.Figure)
+    assert isinstance(distribution, go.Figure)
     assert 'class="ct-stage ct-selected" data-stage="ffn_hidden"' in diagram
 
 
@@ -323,12 +331,29 @@ def test_selection_can_switch_back_to_the_default_location(tmp_path):
     manager.load(str(tmp_path))
     app.analyze_prompt_callback("hello , world", manager)
 
-    explanation, _, _, diagram = app.select_location_callback(
-        "output_norm", "0", manager
+    _, explanation, _, _, _, _, _, diagram = app.select_location_callback(
+        "output_norm", "0", False, manager
     )
 
     assert "Final block output" in explanation
     assert 'class="ct-stage ct-selected" data-stage="output_norm"' in diagram
+
+
+def test_clicked_token_rerenders_all_views_and_updates_selector(tmp_path):
+    make_checkpoint(tmp_path)
+    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager.load(str(tmp_path))
+    app.analyze_prompt_callback("hello , world", manager)
+
+    token, explanation, stats, visible_range, magnitude, heatmap, distribution, _ = (
+        app.select_clicked_token_callback("1", "output_norm", "2", False, manager)
+    )
+
+    assert token["value"] == "1"
+    assert "Final block output" in explanation
+    assert "Selected token" in stats
+    assert "Visible heatmap range" in visible_range
+    assert all(isinstance(plot, go.Figure) for plot in (magnitude, heatmap, distribution))
 
 
 def test_selection_before_analysis_reports_awaiting_state(tmp_path):
@@ -336,13 +361,17 @@ def test_selection_before_analysis_reports_awaiting_state(tmp_path):
     manager = app.ModelManager(device_detector=lambda: fake_device())
     manager.load(str(tmp_path))
 
-    explanation, stats, plot, diagram = app.select_location_callback(
-        "output_norm", "0", manager
+    token, explanation, stats, visible_range, magnitude, heatmap, distribution, diagram = app.select_location_callback(
+        "output_norm", "0", False, manager
     )
 
+    assert token["value"] is None
     assert explanation == app.INSPECT_AWAITING
     assert stats == ""
-    assert plot is None
+    assert visible_range == ""
+    assert magnitude is None
+    assert heatmap is None
+    assert distribution is None
     assert "ct-selected" not in diagram
 
 
@@ -362,8 +391,11 @@ def test_failed_analysis_clears_the_stored_capture(tmp_path):
     assert outputs[6]["choices"] == []
     assert outputs[7] == app.INSPECT_AWAITING
     assert outputs[8] == ""
-    assert outputs[9] is None
-    assert "ct-selected" not in outputs[10]
+    assert outputs[9] == ""
+    assert outputs[10] is None
+    assert outputs[11] is None
+    assert outputs[12] is None
+    assert "ct-selected" not in outputs[13]
 
 
 def test_loading_a_new_checkpoint_clears_the_stored_capture(tmp_path):

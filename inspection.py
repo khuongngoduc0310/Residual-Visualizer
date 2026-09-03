@@ -24,6 +24,7 @@ class LocationSpec:
     label: str
     category: str
     explanation: str
+    normalized: bool = False
 
 
 LOCATIONS: Tuple[LocationSpec, ...] = (
@@ -60,8 +61,10 @@ LOCATIONS: Tuple[LocationSpec, ...] = (
         category=RESIDUAL_STREAM,
         explanation=(
             "The first post-norm layer normalization applied to the attention "
-            "residual stream."
+            "residual stream. Because layer normalization fixes each token's "
+            "feature scale, its token-magnitude chart may look nearly flat."
         ),
+        normalized=True,
     ),
     LocationSpec(
         key="ffn_hidden",
@@ -96,8 +99,11 @@ LOCATIONS: Tuple[LocationSpec, ...] = (
         category=RESIDUAL_STREAM,
         explanation=(
             "The final layer-normalized block output. It is the residual "
-            "stream state used to predict the next token."
+            "stream state used to predict the next token. Because layer "
+            "normalization fixes each token's feature scale, its token-"
+            "magnitude chart may look nearly flat."
         ),
+        normalized=True,
     ),
 )
 
