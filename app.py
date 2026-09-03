@@ -2679,7 +2679,7 @@ EXPORT_DIALOG_HTML = """
 # Raw downloads POST to /ct-export and are saved from the returned blob;
 # image downloads run through the browser-side Plotly exporter above.
 OPEN_EXPORT_DIALOG_JS = """
-(() => {
+() => {
   const ORIGIN = window.location.origin;
   const dialog = document.getElementById('ct-export-dialog');
   if (!dialog || typeof dialog.showModal !== 'function') return [];
@@ -2868,7 +2868,7 @@ OPEN_EXPORT_DIALOG_JS = """
   refreshOptions();
   if (!dialog.open) dialog.showModal();
   return [];
-})();
+}
 """
 
 

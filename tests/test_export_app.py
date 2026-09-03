@@ -319,6 +319,8 @@ def test_export_dialog_html_is_an_accessible_modal_with_explicit_choices():
 def test_export_dialog_js_refreshes_options_and_disables_invalid_choices():
     script = app.OPEN_EXPORT_DIALOG_JS
 
+    assert script.lstrip().startswith("() =>")
+    assert not script.rstrip().endswith(")();")
     assert "/ct-export-options" in script
     assert "/ct-export" in script
     assert "showModal" in script
@@ -346,5 +348,13 @@ def test_diagnostics_window_ships_browser_image_export_with_local_plotly():
 
 def test_create_app_accepts_export_wiring_without_launching():
     demo = app.create_app(app.ModelManager(device_detector=fake_device))
+    configured_scripts = [
+        dependency["js"]
+        for dependency in demo.get_config_file()["dependencies"]
+        if dependency.get("js")
+    ]
+
     assert isinstance(demo, app.gr.Blocks)
     assert "ct-export-dialog" in app.EXPORT_DIALOG_HTML
+    assert configured_scripts
+    assert all(script.lstrip().startswith("() =>") for script in configured_scripts)
