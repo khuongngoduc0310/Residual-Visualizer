@@ -164,6 +164,20 @@ TensorFlow and Keras versions, model sizes, and text-processing settings. The
 loader refuses incomplete or inconsistent folders rather than loading uncertain
 data.
 
+If a trusted TensorFlow 2.20.0/Keras 3.13.2 format-1 checkpoint is encountered,
+the included one-time migration command can create a new format-2 folder without
+altering the original:
+
+```powershell
+python scripts/migrate_checkpoint.py `
+  "checkpoints\old-checkpoint" `
+  "checkpoints\old-checkpoint-v2"
+```
+
+Use the new `-v2` folder in the app. The command refuses checkpoints with an
+unknown runtime, architecture, vocabulary, or weight shape. Do not edit the
+metadata by hand.
+
 ## Colab Training And Export
 
 Use the standard hosted Colab runtime. It currently provides Python 3.13.15 and
