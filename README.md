@@ -82,11 +82,10 @@ validates all three files before showing the model details, reports CUDA GPU or
 CPU based on TensorFlow's actual device visibility, and keeps the Gradio server
 bound to localhost with public sharing disabled.
 
-For a quick responsive UI check, test the workflow at a desktop width of at
-least 1024px and a mobile width around 390px. On mobile, controls, tables, and
-charts should stack without page-level horizontal scrolling; wide tables may
-scroll within their own region. Verify that a magnitude-bar click still updates
-the token selector and the other two charts at both widths.
+For a quick UI check, use a desktop browser width of at least 1280px. Verify
+that the control rail, model path, activation field, two supporting charts, and
+output tabs are visible as a coherent workspace. A magnitude-bar click should
+still update the token selector and the other two charts.
 
 Loading a new checkpoint first releases the current model and clears the old
 details. If the replacement fails, no model remains active. TensorFlow may keep

@@ -37,88 +37,185 @@ LIGHT_THEME = gr.themes.Soft()
 
 APP_CSS = """
 .ct-page {
-    max-width: 1180px;
+    max-width: 1440px;
     margin: 0 auto;
+    padding: 1.25rem 1.5rem 2rem;
+    color: #172033;
+}
+.ct-header {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 2rem;
+    margin-bottom: 1.25rem;
+    border-bottom: 1px solid #d9d5cc;
+    padding-bottom: 1rem;
+}
+.ct-kicker {
+    color: #b35c32;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+}
+.ct-title {
+    color: #172033;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 2.45rem;
+    letter-spacing: -0.04em;
+    line-height: 1;
+    margin: 0.35rem 0 0;
 }
 .ct-subtitle {
-    color: #64748b;
-    font-size: 1.05rem;
+    color: #6c7482;
+    font-size: 0.95rem;
+    margin: 0.55rem 0 0;
+}
+.ct-header-note {
+    color: #6c7482;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-align: right;
+    text-transform: uppercase;
+}
+.ct-console {
+    align-items: flex-start;
+    gap: 1.25rem;
+}
+.ct-rail {
+    background: #f1eee7;
+    border: 1px solid #d9d5cc;
+    border-radius: 10px;
+    padding: 1rem;
+}
+.ct-workspace {
+    min-width: 0;
+}
+.ct-panel {
+    background: #fffdfa;
+    border: 1px solid #d9d5cc;
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+}
+.ct-panel + .ct-panel {
+    margin-top: 1rem;
+}
+.ct-section-label {
+    color: #6c7482;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    margin-bottom: 0.55rem;
+    text-transform: uppercase;
+}
+.ct-panel-title {
+    color: #172033;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 1.35rem;
+    margin: 0 0 0.7rem;
 }
 .ct-status {
-    border: 1px solid #dbe4ef;
-    border-radius: 12px;
-    padding: 0.8rem 1rem;
-    background: #f8fafc;
+    border: 1px solid #d9d5cc;
+    border-radius: 7px;
+    padding: 0.65rem 0.75rem;
+    background: #fffdfa;
+    font-size: 0.86rem;
+}
+.ct-status-success {
+    border-color: #9cc4b0;
+    background: #eef8f1;
+}
+.ct-meta {
+    color: #596271;
+    font-size: 0.82rem;
+    line-height: 1.55;
+}
+.ct-analysis-status {
+    margin: 0.75rem 0;
 }
 .ct-two-up,
-.ct-chart-row {
+.ct-chart-row,
+.ct-control-row {
     min-width: 0;
+    gap: 0.75rem;
 }
 .ct-two-up > *,
-.ct-chart-row > * {
+.ct-chart-row > *,
+.ct-control-row > * {
     min-width: 0;
+}
+.ct-chart-row {
+    align-items: stretch;
+}
+.ct-chart-row .wrap {
+    min-height: 330px;
+}
+.ct-chart-main .wrap {
+    min-height: 520px;
 }
 .ct-table {
     min-width: 0;
 }
+.ct-table-wrap {
+    overflow-x: auto;
+}
+.ct-diagram-wrap {
+    overflow-x: auto;
+}
 .ct-diagram {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: stretch;
-    gap: 0.65rem;
-    padding: 0.4rem 0;
+    gap: 0.5rem;
+    min-width: 1060px;
+    padding: 0.4rem 0 0.75rem;
 }
 .ct-stage {
-    flex: 1 1 180px;
-    min-width: 160px;
-    border: 1px solid #cbd5e1;
-    border-radius: 12px;
-    padding: 0.85rem;
-    background: #ffffff;
-    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+    flex: 1 0 112px;
+    min-width: 112px;
+    border: 1px solid #d9d5cc;
+    border-top: 3px solid #9ca3af;
+    border-radius: 7px;
+    padding: 0.65rem;
+    background: #f8f6f1;
 }
 .ct-stage-label {
-    color: #2563eb;
-    font-size: 0.74rem;
+    color: #6c7482;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.62rem;
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
 }
 .ct-stage-name {
-    color: #0f172a;
-    font-weight: 650;
+    color: #172033;
+    font-size: 0.8rem;
+    font-weight: 700;
+    line-height: 1.2;
     margin-top: 0.35rem;
 }
 .ct-stage-detail {
-    color: #64748b;
+    color: #6c7482;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.78rem;
+    font-size: 0.63rem;
+    line-height: 1.35;
     margin-top: 0.45rem;
 }
+.ct-stage[data-category="Attention"] { border-top-color: #b35c32; }
+.ct-stage[data-category="FFN"] { border-top-color: #6a7190; }
+.ct-stage[data-category="Residual Stream"] { border-top-color: #3f8a72; }
 .ct-stage.ct-selected {
-    border-color: #2563eb;
-    background: #eff6ff;
-    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25);
+    border-color: #b35c32;
+    background: #fff1e9;
+    box-shadow: 0 0 0 2px rgba(179, 92, 50, 0.2);
 }
 .ct-arrow {
     align-self: center;
-    color: #94a3b8;
-    font-size: 1.25rem;
-}
-@media (max-width: 720px) {
-    .ct-two-up,
-    .ct-chart-row {
-        flex-direction: column;
-    }
-    .ct-table {
-        overflow-x: auto;
-    }
-    .ct-arrow {
-        display: none;
-    }
-    .ct-stage {
-        flex-basis: 100%;
-    }
+    color: #a9a49a;
+    font-size: 1rem;
 }
 """
 
@@ -245,13 +342,14 @@ def render_model_diagram(
     for index, (key, category, name, detail) in enumerate(stages):
         classes = "ct-stage ct-selected" if key == selected_key else "ct-stage"
         cards.append(
-            "<div class=\"{}\" data-stage=\"{}\">"
+            "<div class=\"{}\" data-stage=\"{}\" data-category=\"{}\">"
             "<div class=\"ct-stage-label\">{}</div>"
             "<div class=\"ct-stage-name\">{}</div>"
             "<div class=\"ct-stage-detail\">{}</div>"
             "</div>".format(
                 classes,
                 html.escape(key),
+                html.escape(category),
                 html.escape(category),
                 html.escape(name),
                 html.escape(detail),
@@ -686,99 +784,111 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
     manager = manager or ModelManager()
     with gr.Blocks(title="Circuit Tracer") as demo:
         with gr.Column(elem_classes="ct-page"):
-            gr.Markdown("# Circuit Tracer")
-            gr.Markdown(
-                "Explore the residual stream of a trained one-block language model.",
-                elem_classes="ct-subtitle",
-            )
-            with gr.Row():
-                checkpoint_folder = gr.Textbox(
-                    label="Checkpoint folder (server path)",
-                    placeholder="/mnt/c/checkpoints/checkpoint-20260902",
-                    scale=4,
-                )
-                load_button = gr.Button("Load Model", variant="primary", scale=1)
-            status = gr.Markdown(
-                "No model loaded. Enter an extracted checkpoint folder and press Load Model.",
-                elem_classes="ct-status",
-            )
-            with gr.Row(elem_classes="ct-two-up"):
-                metadata = gr.Markdown("", label="Checkpoint details")
-                device = gr.Markdown("**Compute device:** `not loaded`", label="Runtime")
-            gr.Markdown("## Model architecture")
-            diagram = gr.HTML(render_model_diagram())
-            with gr.Accordion("Technical model summary", open=False):
-                summary = gr.Textbox(
-                    value="",
-                    lines=20,
-                    max_lines=40,
-                    label="model.summary()",
-                    interactive=False,
-                )
+            with gr.Row(elem_classes="ct-header"):
+                with gr.Column(scale=4):
+                    gr.Markdown("RESIDUAL STREAM / INSPECTION", elem_classes="ct-kicker")
+                    gr.Markdown("Circuit Tracer", elem_classes="ct-title")
+                    gr.Markdown(
+                        "A visual workbench for tracing one-block language-model activations.",
+                        elem_classes="ct-subtitle",
+                    )
+                gr.Markdown("LOCAL ANALYSIS\nNO TELEMETRY", elem_classes="ct-header-note")
+            with gr.Row(elem_classes="ct-console"):
+                with gr.Column(scale=3, elem_classes="ct-rail"):
+                    gr.Markdown("01 / LOAD CHECKPOINT", elem_classes="ct-section-label")
+                    checkpoint_folder = gr.Textbox(
+                        label="Server path",
+                        placeholder="C:\\...\\checkpoint-v2",
+                    )
+                    load_button = gr.Button("Load model", variant="primary")
+                    status = gr.Markdown(
+                        "No model loaded. Enter an extracted checkpoint folder.",
+                        elem_classes="ct-status",
+                    )
+                    gr.Markdown("Runtime", elem_classes="ct-section-label")
+                    device = gr.Markdown(
+                        "**Compute device:** `not loaded`",
+                        elem_classes="ct-meta",
+                    )
+                    metadata = gr.Markdown("", elem_classes="ct-meta")
+                    with gr.Accordion("Technical model summary", open=False):
+                        summary = gr.Textbox(
+                            value="",
+                            lines=16,
+                            max_lines=30,
+                            label="model.summary()",
+                            interactive=False,
+                        )
+                    gr.Markdown("02 / ANALYZE PROMPT", elem_classes="ct-section-label")
+                    prompt_text = gr.Textbox(
+                        label="Prompt",
+                        lines=5,
+                        placeholder="Enter a prompt to trace...",
+                    )
+                    analyze_button = gr.Button("Analyze prompt", variant="primary")
+                    analysis_status = gr.Markdown(
+                        "Load a model, then enter a prompt.",
+                        elem_classes="ct-status ct-analysis-status",
+                    )
+                    token_count_line = gr.Markdown("", elem_classes="ct-meta")
+                    unknown_warning = gr.Markdown("", elem_classes="ct-meta")
+                with gr.Column(scale=8, elem_classes="ct-workspace"):
+                    with gr.Group(elem_classes="ct-panel"):
+                        gr.Markdown("MODEL PATH", elem_classes="ct-section-label")
+                        gr.Markdown("The one-block causal language model", elem_classes="ct-panel-title")
+                        diagram = gr.HTML(
+                            render_model_diagram(),
+                            elem_classes="ct-diagram-wrap",
+                        )
+                    with gr.Group(elem_classes="ct-panel"):
+                        gr.Markdown("03 / INSPECT CAPTURED STATES", elem_classes="ct-section-label")
+                        with gr.Row(elem_classes="ct-control-row"):
+                            location_dropdown = gr.Dropdown(
+                                choices=[], value=None, interactive=True, label="Internal location", scale=2
+                            )
+                            token_dropdown = gr.Dropdown(
+                                choices=[], value=None, interactive=True, label="Token position", scale=1
+                            )
+                            heatmap_clip = gr.Checkbox(
+                                label="Clip extremes", value=False, scale=1
+                            )
+                        inspect_explanation = gr.Markdown(INSPECT_AWAITING, elem_classes="ct-meta")
+                        with gr.Row(elem_classes="ct-two-up"):
+                            inspect_stats = gr.Markdown("", elem_classes="ct-meta")
+                            inspect_range = gr.Markdown("", elem_classes="ct-meta")
+                    with gr.Group(elem_classes="ct-panel ct-chart-main"):
+                        heatmap_plot = gr.Plot(label="Activation field")
+                    with gr.Row(elem_classes="ct-chart-row"):
+                        with gr.Group(elem_classes="ct-panel"):
+                            magnitude_plot = gr.Plot(
+                                label="Token magnitudes",
+                                elem_id="ct-magnitude-plot",
+                            )
+                        with gr.Group(elem_classes="ct-panel"):
+                            distribution_plot = gr.Plot(label="Selected token distribution")
+                    with gr.Group(elem_classes="ct-panel"):
+                        gr.Markdown("PROMPT OUTPUT", elem_classes="ct-section-label")
+                        with gr.Tabs():
+                            with gr.Tab("Tokens"):
+                                token_table = gr.Dataframe(
+                                    headers=["Position", "Token", "ID"],
+                                    interactive=False,
+                                    label="Prompt tokens",
+                                    elem_classes="ct-table",
+                                )
+                            with gr.Tab("Next-token ranking"):
+                                next_token_table = gr.Dataframe(
+                                    headers=["Rank", "Token", "ID", "Probability"],
+                                    interactive=False,
+                                    label="Five most likely next tokens",
+                                    elem_classes="ct-table",
+                                )
+                    token_click = gr.Textbox(value="", visible=False, elem_id="ct-token-click")
             load_button.click(
                 fn=lambda directory: load_model_callback(directory, manager),
                 inputs=checkpoint_folder,
                 outputs=[status, metadata, device, diagram, summary],
                 show_progress="minimal",
-            )
-            gr.Markdown("## Analyze a prompt")
-            prompt_text = gr.Textbox(
-                label="Prompt",
-                lines=3,
-                placeholder="Enter text to analyze with the loaded model.",
-            )
-            analyze_button = gr.Button("Analyze Prompt", variant="primary")
-            analysis_status = gr.Markdown(
-                "Load a model, enter a prompt, and press Analyze Prompt.",
-                elem_classes="ct-status",
-            )
-            token_count_line = gr.Markdown("")
-            unknown_warning = gr.Markdown("")
-            with gr.Row(elem_classes="ct-two-up"):
-                token_table = gr.Dataframe(
-                    headers=["Position", "Token", "ID"],
-                    interactive=False,
-                    label="Prompt tokens",
-                    elem_classes="ct-table",
-                )
-                next_token_table = gr.Dataframe(
-                    headers=["Rank", "Token", "ID", "Probability"],
-                    interactive=False,
-                    label="Five most likely next tokens",
-                    elem_classes="ct-table",
-                )
-            gr.Markdown("## Inspect model locations")
-            with gr.Row():
-                location_dropdown = gr.Dropdown(
-                    choices=[],
-                    value=None,
-                    interactive=True,
-                    label="Location",
-                )
-                token_dropdown = gr.Dropdown(
-                    choices=[],
-                    value=None,
-                    interactive=True,
-                    label="Token position",
-                )
-            inspect_explanation = gr.Markdown(INSPECT_AWAITING)
-            inspect_stats = gr.Markdown("")
-            heatmap_clip = gr.Checkbox(
-                label="Clip heatmap display to the 1st-99th percentile",
-                value=False,
-            )
-            inspect_range = gr.Markdown("")
-            with gr.Row(elem_classes="ct-chart-row"):
-                magnitude_plot = gr.Plot(
-                    label="Token magnitudes",
-                    elem_id="ct-magnitude-plot",
-                )
-                distribution_plot = gr.Plot(label="Selected token distribution")
-            heatmap_plot = gr.Plot(label="Token-by-dimension activation heatmap")
-            token_click = gr.Textbox(
-                value="",
-                visible=False,
-                elem_id="ct-token-click",
             )
             analyze_button.click(
                 fn=lambda prompt: analyze_and_inspect_callback(prompt, manager),
