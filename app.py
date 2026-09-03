@@ -32,27 +32,46 @@ from model import ARCHITECTURE_NAME, ModelConfig
 LOGGER = logging.getLogger(__name__)
 LOCAL_SERVER_NAME = "127.0.0.1"
 SHARE_PUBLICLY = False
-LIGHT_THEME = gr.themes.Soft()
+LIGHT_THEME = gr.themes.Base(
+    primary_hue="blue",
+    secondary_hue="slate",
+    neutral_hue="slate",
+)
 
 
 APP_CSS = """
+html,
+body,
+.gradio-container {
+    background: #ffffff !important;
+    color: #111827 !important;
+    margin: 0 !important;
+    max-width: none !important;
+    min-height: 100vh !important;
+    padding: 0 !important;
+}
+.gradio-container {
+    overflow: hidden !important;
+}
 .ct-page {
-    max-width: 1440px;
-    margin: 0 auto;
-    padding: 1.25rem 1.5rem 2rem;
-    color: #172033;
+    box-sizing: border-box;
+    height: 100vh;
+    max-width: none;
+    padding: 0.8rem 1rem;
+    color: #111827;
 }
 .ct-header {
     display: flex;
     align-items: end;
     justify-content: space-between;
     gap: 2rem;
-    margin-bottom: 1.25rem;
-    border-bottom: 1px solid #d9d5cc;
-    padding-bottom: 1rem;
+    height: 4.4rem;
+    margin-bottom: 0.7rem;
+    border-bottom: 1px solid #d1d5db;
+    padding: 0 0.2rem 0.7rem;
 }
 .ct-kicker {
-    color: #b35c32;
+    color: #1d4ed8;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 0.72rem;
     font-weight: 700;
@@ -60,7 +79,7 @@ APP_CSS = """
     text-transform: uppercase;
 }
 .ct-title {
-    color: #172033;
+    color: #111827;
     font-family: Georgia, "Times New Roman", serif;
     font-size: 2.45rem;
     letter-spacing: -0.04em;
@@ -68,12 +87,12 @@ APP_CSS = """
     margin: 0.35rem 0 0;
 }
 .ct-subtitle {
-    color: #6c7482;
+    color: #4b5563;
     font-size: 0.95rem;
     margin: 0.55rem 0 0;
 }
 .ct-header-note {
-    color: #6c7482;
+    color: #4b5563;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 0.72rem;
     letter-spacing: 0.06em;
@@ -83,27 +102,35 @@ APP_CSS = """
 .ct-console {
     align-items: flex-start;
     gap: 1.25rem;
+    height: calc(100vh - 5.9rem);
+    min-height: 0;
 }
 .ct-rail {
-    background: #f1eee7;
-    border: 1px solid #d9d5cc;
-    border-radius: 10px;
-    padding: 1rem;
+    background: #f8fafc;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0.8rem;
 }
 .ct-workspace {
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
     min-width: 0;
 }
 .ct-panel {
-    background: #fffdfa;
-    border: 1px solid #d9d5cc;
-    border-radius: 10px;
-    padding: 1rem 1.1rem;
+    background: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 0.8rem 0.9rem;
 }
 .ct-panel + .ct-panel {
     margin-top: 1rem;
 }
 .ct-section-label {
-    color: #6c7482;
+    color: #4b5563;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 0.7rem;
     font-weight: 700;
@@ -112,16 +139,16 @@ APP_CSS = """
     text-transform: uppercase;
 }
 .ct-panel-title {
-    color: #172033;
+    color: #111827;
     font-family: Georgia, "Times New Roman", serif;
     font-size: 1.35rem;
     margin: 0 0 0.7rem;
 }
 .ct-status {
-    border: 1px solid #d9d5cc;
+    border: 1px solid #cbd5e1;
     border-radius: 7px;
     padding: 0.65rem 0.75rem;
-    background: #fffdfa;
+    background: #ffffff;
     font-size: 0.86rem;
 }
 .ct-status-success {
@@ -129,7 +156,7 @@ APP_CSS = """
     background: #eef8f1;
 }
 .ct-meta {
-    color: #596271;
+    color: #374151;
     font-size: 0.82rem;
     line-height: 1.55;
 }
@@ -154,7 +181,7 @@ APP_CSS = """
     min-height: 330px;
 }
 .ct-chart-main .wrap {
-    min-height: 520px;
+    min-height: 430px;
 }
 .ct-table {
     min-width: 0;
@@ -164,6 +191,42 @@ APP_CSS = """
 }
 .ct-diagram-wrap {
     overflow-x: auto;
+}
+.ct-visual-panel {
+    position: relative;
+}
+.ct-expand-button {
+    margin-left: auto;
+    width: auto;
+}
+.ct-close-button {
+    display: none;
+}
+body.ct-visual-expanded {
+    overflow: hidden !important;
+}
+body.ct-visual-expanded #ct-visual-panel {
+    background: #ffffff;
+    border: 0;
+    border-radius: 0;
+    box-sizing: border-box;
+    height: 100vh;
+    inset: 0;
+    overflow-y: auto;
+    padding: 1.2rem 1.5rem 1.5rem;
+    position: fixed;
+    width: 100vw;
+    z-index: 1000;
+}
+body.ct-visual-expanded #ct-visual-panel .ct-close-button {
+    display: block;
+    position: absolute;
+    right: 1.5rem;
+    top: 1rem;
+    z-index: 2;
+}
+body.ct-visual-expanded #ct-visual-panel .ct-chart-main .wrap {
+    min-height: 62vh;
 }
 .ct-diagram {
     display: flex;
@@ -176,7 +239,7 @@ APP_CSS = """
 .ct-stage {
     flex: 1 0 112px;
     min-width: 112px;
-    border: 1px solid #d9d5cc;
+    border: 1px solid #d1d5db;
     border-top: 3px solid #9ca3af;
     border-radius: 7px;
     padding: 0.65rem;
@@ -477,7 +540,23 @@ INSPECT_AWAITING = (
 
 CLICK_BRIDGE_JS = """
 () => {
+  const bindOverlayButton = (id, action) => {
+    const host = document.querySelector(`#${id}`);
+    if (!host || host.dataset.overlayButtonBound === 'true') return;
+    const button = host.querySelector('button') || host;
+    host.dataset.overlayButtonBound = 'true';
+    button.addEventListener('click', action);
+  };
+  const installOverlayControls = () => {
+    bindOverlayButton('ct-expand-visuals', () => {
+      document.body.classList.add('ct-visual-expanded');
+    });
+    bindOverlayButton('ct-close-visuals', () => {
+      document.body.classList.remove('ct-visual-expanded');
+    });
+  };
   const install = () => {
+    installOverlayControls();
     const host = document.querySelector('#ct-magnitude-plot');
     if (!host || host.dataset.clickBridgeInstalled === 'true') return;
     host.dataset.clickBridgeInstalled = 'true';
@@ -852,20 +931,34 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
                             heatmap_clip = gr.Checkbox(
                                 label="Clip extremes", value=False, scale=1
                             )
+                            gr.Button(
+                                "Expand visualizations",
+                                elem_id="ct-expand-visuals",
+                                scale=1,
+                            )
                         inspect_explanation = gr.Markdown(INSPECT_AWAITING, elem_classes="ct-meta")
                         with gr.Row(elem_classes="ct-two-up"):
                             inspect_stats = gr.Markdown("", elem_classes="ct-meta")
                             inspect_range = gr.Markdown("", elem_classes="ct-meta")
-                    with gr.Group(elem_classes="ct-panel ct-chart-main"):
-                        heatmap_plot = gr.Plot(label="Activation field")
-                    with gr.Row(elem_classes="ct-chart-row"):
-                        with gr.Group(elem_classes="ct-panel"):
-                            magnitude_plot = gr.Plot(
-                                label="Token magnitudes",
-                                elem_id="ct-magnitude-plot",
-                            )
-                        with gr.Group(elem_classes="ct-panel"):
-                            distribution_plot = gr.Plot(label="Selected token distribution")
+                    with gr.Group(
+                        elem_id="ct-visual-panel",
+                        elem_classes="ct-panel ct-visual-panel",
+                    ):
+                        gr.Button(
+                            "Close expanded view",
+                            elem_id="ct-close-visuals",
+                            elem_classes="ct-close-button",
+                        )
+                        with gr.Group(elem_classes="ct-chart-main"):
+                            heatmap_plot = gr.Plot(label="Activation field")
+                        with gr.Row(elem_classes="ct-chart-row"):
+                            with gr.Group(elem_classes="ct-panel"):
+                                magnitude_plot = gr.Plot(
+                                    label="Token magnitudes",
+                                    elem_id="ct-magnitude-plot",
+                                )
+                            with gr.Group(elem_classes="ct-panel"):
+                                distribution_plot = gr.Plot(label="Selected token distribution")
                     with gr.Group(elem_classes="ct-panel"):
                         gr.Markdown("PROMPT OUTPUT", elem_classes="ct-section-label")
                         with gr.Tabs():

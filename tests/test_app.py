@@ -265,6 +265,10 @@ def test_create_app_does_not_launch_server():
     demo = app.create_app(app.ModelManager(device_detector=lambda: fake_device()))
 
     assert isinstance(demo, app.gr.Blocks)
+    assert "background: #ffffff" in app.APP_CSS
+    assert "ct-expand-visuals" in app.CLICK_BRIDGE_JS
+    assert "ct-close-visuals" in app.CLICK_BRIDGE_JS
+    assert "ct-visual-expanded" in app.APP_CSS
     assert app.launch_kwargs() == {
         "server_name": "127.0.0.1",
         "share": False,
