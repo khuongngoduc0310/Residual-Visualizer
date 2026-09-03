@@ -32,6 +32,7 @@ from model import ARCHITECTURE_NAME, ModelConfig
 LOGGER = logging.getLogger(__name__)
 LOCAL_SERVER_NAME = "127.0.0.1"
 SHARE_PUBLICLY = False
+LIGHT_THEME = gr.themes.Soft()
 
 
 APP_CSS = """
@@ -48,6 +49,17 @@ APP_CSS = """
     border-radius: 12px;
     padding: 0.8rem 1rem;
     background: #f8fafc;
+}
+.ct-two-up,
+.ct-chart-row {
+    min-width: 0;
+}
+.ct-two-up > *,
+.ct-chart-row > * {
+    min-width: 0;
+}
+.ct-table {
+    min-width: 0;
 }
 .ct-diagram {
     display: flex;
@@ -94,6 +106,13 @@ APP_CSS = """
     font-size: 1.25rem;
 }
 @media (max-width: 720px) {
+    .ct-two-up,
+    .ct-chart-row {
+        flex-direction: column;
+    }
+    .ct-table {
+        overflow-x: auto;
+    }
     .ct-arrow {
         display: none;
     }
@@ -659,6 +678,7 @@ def launch_kwargs() -> dict:
     return {
         "server_name": LOCAL_SERVER_NAME,
         "share": SHARE_PUBLICLY,
+        "theme": LIGHT_THEME,
     }
 
 
@@ -682,7 +702,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
                 "No model loaded. Enter an extracted checkpoint folder and press Load Model.",
                 elem_classes="ct-status",
             )
-            with gr.Row():
+            with gr.Row(elem_classes="ct-two-up"):
                 metadata = gr.Markdown("", label="Checkpoint details")
                 device = gr.Markdown("**Compute device:** `not loaded`", label="Runtime")
             gr.Markdown("## Model architecture")
@@ -714,16 +734,18 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
             )
             token_count_line = gr.Markdown("")
             unknown_warning = gr.Markdown("")
-            with gr.Row():
+            with gr.Row(elem_classes="ct-two-up"):
                 token_table = gr.Dataframe(
                     headers=["Position", "Token", "ID"],
                     interactive=False,
                     label="Prompt tokens",
+                    elem_classes="ct-table",
                 )
                 next_token_table = gr.Dataframe(
                     headers=["Rank", "Token", "ID", "Probability"],
                     interactive=False,
                     label="Five most likely next tokens",
+                    elem_classes="ct-table",
                 )
             gr.Markdown("## Inspect model locations")
             with gr.Row():
@@ -746,7 +768,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
                 value=False,
             )
             inspect_range = gr.Markdown("")
-            with gr.Row():
+            with gr.Row(elem_classes="ct-chart-row"):
                 magnitude_plot = gr.Plot(
                     label="Token magnitudes",
                     elem_id="ct-magnitude-plot",

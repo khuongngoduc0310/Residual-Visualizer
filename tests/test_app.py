@@ -268,6 +268,7 @@ def test_create_app_does_not_launch_server():
     assert app.launch_kwargs() == {
         "server_name": "127.0.0.1",
         "share": False,
+        "theme": app.LIGHT_THEME,
     }
 
 

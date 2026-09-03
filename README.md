@@ -13,10 +13,10 @@ format used by both Google Colab training and the local inspection app.
 - h5py 3.16.0
 - protobuf 5.29.6
 - Gradio 6.26.0
-- WSL2/Linux with an NVIDIA driver for GPU inference
+- Native Windows for CPU inference, or WSL2/Linux with an NVIDIA driver for GPU inference
 
 TensorFlow 2.20 does not provide native-Windows NVIDIA GPU support. Native
-Windows can be used for CPU-only checks; use WSL2 for the local GPU app.
+Windows is the supported CPU path; use WSL2 for GPU inference.
 
 Inside WSL2, select the project Python with pyenv and create an isolated
 environment:
@@ -32,15 +32,35 @@ Verify the NVIDIA and TensorFlow GPU paths:
 
 ```bash
 nvidia-smi
+nvcc --version
 python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
+python -c "import tensorflow as tf; print(tf.sysconfig.get_build_info())"
 ```
 
-For CPU-only development, install `requirements-dev.txt` instead. Run the
-checks with:
+The TensorFlow command must list at least one GPU. Then load a checkpoint in
+the app, confirm the runtime says `CUDA GPU`, and complete one prompt analysis.
+If the list is empty, check the NVIDIA driver and WSL2 CUDA passthrough before
+debugging the app. The app intentionally falls back to CPU when no usable GPU
+is visible.
 
-```bash
+For CPU-only development on Windows:
+
+```powershell
+py -3.13-64 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-dev.txt
+python scripts/verify_environment.py
 python -m pip check
 python -m pytest
+```
+
+`verify_environment.py` checks the supported Python bitness and direct package
+versions. `pip check` verifies dependency metadata; both checks are required.
+
+Run the app with one local-only command:
+
+```powershell
+python app.py
 ```
 
 ## Run The Local App
@@ -50,18 +70,23 @@ the machine running Python; it does not upload the folder through the browser.
 For example, a checkpoint stored on the Windows drive is available in WSL2 at
 `/mnt/c/Projects/Circuit Tracer/exports/checkpoint-20260902`.
 
-Start the app inside WSL2:
+Start the app from the environment containing the dependencies:
 
-```bash
-source .venv/bin/activate
+```powershell
 python app.py
 ```
 
-Open `http://127.0.0.1:7860` in the Windows browser. Enter the extracted folder
+Open `http://127.0.0.1:7860` in a browser. Enter the extracted folder
 path in **Checkpoint folder (server path)** and press **Load Model**. The app
 validates all three files before showing the model details, reports CUDA GPU or
 CPU based on TensorFlow's actual device visibility, and keeps the Gradio server
 bound to localhost with public sharing disabled.
+
+For a quick responsive UI check, test the workflow at a desktop width of at
+least 1024px and a mobile width around 390px. On mobile, controls, tables, and
+charts should stack without page-level horizontal scrolling; wide tables may
+scroll within their own region. Verify that a magnitude-bar click still updates
+the token selector and the other two charts at both widths.
 
 Loading a new checkpoint first releases the current model and clears the old
 details. If the replacement fails, no model remains active. TensorFlow may keep
@@ -142,13 +167,16 @@ data.
 ## Colab Training And Export
 
 Use the standard hosted Colab runtime. It currently provides Python 3.13.15 and
-the exact package versions used by the checkpoint contract. Clone the
-repository and import from that checkout instead of copying model classes into
-the notebook:
+the exact package versions used by the checkpoint contract. The notebook pins
+the repository revision in its first setup cell; update that value only when
+releasing a new compatible app. Clone the repository and import from that
+checkout instead of copying model classes into the notebook:
 
 ```python
+REPOSITORY_REVISION = "132461d"  # immutable app/chart implementation revision
 !git clone https://github.com/khuongngoduc0310/Residual-Visualizer.git
 %cd Residual-Visualizer
+!git checkout {REPOSITORY_REVISION}
 
 import tensorflow as tf
 import keras
@@ -234,7 +262,27 @@ checkpoint, preventing a failed export from mixing old and new files.
 The checkpoint must be exported with TensorFlow 2.20.0 and Keras 3.13.2. A
 checkpoint produced by another runtime is rejected because weight
 compatibility is not guaranteed. The format version is incremented when this
-runtime contract changes, so older TensorFlow 2.10 checkpoints are rejected.
+runtime contract changes; older TensorFlow 2.10 checkpoints are rejected.
+
+## Troubleshooting
+
+- **Python or package version mismatch:** create a fresh 64-bit Python 3.13
+  environment and run `python scripts/verify_environment.py`. Do not repair a
+  mismatched environment by guessing package versions.
+- **CUDA unavailable:** this is expected on native Windows with TensorFlow
+  2.20. Use the CPU requirements and continue locally, or run the GPU app in
+  WSL2. Check `nvidia-smi` and `tf.config.list_physical_devices('GPU')` there.
+- **Missing checkpoint file:** point the app at the extracted folder containing
+  exactly `model.weights.h5`, `vocabulary.json`, and `config.json`, not at the
+  ZIP or an outer directory.
+- **Vocabulary or settings mismatch:** re-export all three files together with
+  `save_checkpoint`; never combine files from different exports.
+- **Unsupported checkpoint format:** export again with the current notebook and
+  app revision. Older formats are rejected intentionally.
+- **Prompt too long:** shorten the processed prompt to the maximum shown in the
+  error. Prompts are rejected rather than silently truncated.
+- **TensorFlow startup warnings:** oneDNN, CPU feature, and Keras deprecation
+  messages are informational unless they are followed by an actual exception.
 
 ## Notebook
 
