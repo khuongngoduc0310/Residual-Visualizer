@@ -6,6 +6,7 @@ from checkpoint import load_checkpoint, save_checkpoint
 from inspection import (
     ATTENTION,
     DEFAULT_LOCATION_KEY,
+    EMBEDDING,
     FFN,
     LOCATION_KEYS,
     RESIDUAL_STREAM,
@@ -71,6 +72,16 @@ def test_single_token_capture_keeps_two_dimensional_shapes(loaded_checkpoint):
         assert tensor.shape == (1, width), key
 
 
+def test_embedding_components_sum_to_pre_attention_residual(loaded_checkpoint):
+    captured = capture_locations(loaded_checkpoint, token_ids("hello , world !"))
+
+    np.testing.assert_allclose(
+        captured.locations["token_embedding"]
+        + captured.locations["position_embedding"],
+        captured.locations["embedding"],
+    )
+
+
 def test_captured_final_output_matches_normal_model_inference(
     loaded_checkpoint,
 ):
@@ -116,6 +127,8 @@ def test_capture_rejects_over_maximum_token_ids(loaded_checkpoint):
 
 def test_location_catalog_is_complete_and_classified():
     assert LOCATION_KEYS == (
+        "token_embedding",
+        "position_embedding",
         "embedding",
         "attention_update",
         "attention_residual",
@@ -131,13 +144,15 @@ def test_location_catalog_is_complete_and_classified():
 def test_location_specs_have_categories_and_explanations():
     from inspection import LOCATIONS
 
-    assert len(LOCATIONS) == 8
+    assert len(LOCATIONS) == 10
     assert tuple(spec.key for spec in LOCATIONS) == LOCATION_KEYS
     for spec in LOCATIONS:
-        assert spec.category in {RESIDUAL_STREAM, ATTENTION, FFN}
+        assert spec.category in {RESIDUAL_STREAM, EMBEDDING, ATTENTION, FFN}
         assert spec.explanation.strip()
         assert spec.label.strip()
     assert {spec.key: spec.category for spec in LOCATIONS} == {
+        "token_embedding": EMBEDDING,
+        "position_embedding": EMBEDDING,
         "embedding": RESIDUAL_STREAM,
         "attention_update": ATTENTION,
         "attention_residual": RESIDUAL_STREAM,
@@ -148,6 +163,8 @@ def test_location_specs_have_categories_and_explanations():
         "output_norm": RESIDUAL_STREAM,
     }
     assert {spec.key: spec.normalized for spec in LOCATIONS} == {
+        "token_embedding": False,
+        "position_embedding": False,
         "embedding": False,
         "attention_update": False,
         "attention_residual": False,
@@ -162,7 +179,7 @@ def test_location_specs_have_categories_and_explanations():
 def test_location_choices_are_labeled_and_ordered():
     choices = location_choices()
 
-    assert len(choices) == 8
+    assert len(choices) == 10
     assert [value for _, value in choices] == list(LOCATION_KEYS)
     assert all(" \u00b7 " in label for label, _ in choices)
     assert choices[-1] == ("Residual Stream \u00b7 Final block output", "output_norm")

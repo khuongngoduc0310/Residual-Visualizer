@@ -82,15 +82,28 @@ validates all three files before showing the model details, reports CUDA GPU or
 CPU based on TensorFlow's actual device visibility, and keeps the Gradio server
 bound to localhost with public sharing disabled.
 
-For a quick UI check, use a desktop browser width of at least 1280px. Verify
-that the control rail, model path, activation field, two supporting charts, and
-output tabs are visible as a coherent workspace. A magnitude-bar click should
-still update the token selector and the other two charts.
+The desktop workbench is designed and checked at `1440x900`: the exact model
+topology stays across the top, captured locations are grouped on the left, the
+activation canvas occupies the center, and tensor metadata stays in the right
+inspector. The page itself does not scroll at this size. Analytical context and
+controls remain fixed while a long token-by-dimension heatmap scrolls inside its
+canvas. Below 1280px the metadata inspector collapses first; below 1080px the
+location navigator also collapses. The **Locations** and **Metadata** buttons
+open either panel when it has been hidden by a breakpoint, and `Escape` closes
+temporary panels or an expanded canvas.
 
-Loading a new checkpoint first releases the current model and clears the old
-details. If the replacement fails, no model remains active. TensorFlow may keep
-reserved GPU memory until the process exits even after the old model is
-released.
+Checkpoint setup starts open and collapses after a successful load. A failed
+load leaves it open and preserves the current research session. After a
+successful analysis, the exact submitted prompt is shown as read-only session
+context; use **Edit prompt** to return to the editor. Prompt tokens and the five
+next-token predictions remain available in the right-side secondary-information
+accordion.
+
+Checkpoint loading validates and prepares a replacement before switching the
+active model. A successful replacement resets the old capture and inspection
+controls together; a failed replacement leaves the current model, capture, and
+views unchanged. TensorFlow may keep reserved GPU memory until the process exits
+even after an old model is released.
 
 ## Analyze A Prompt
 
@@ -117,7 +130,9 @@ locations are:
 
 | Location | Category |
 | --- | --- |
-| Token + position embeddings | Residual Stream |
+| Token embeddings | Embedding |
+| Position embeddings | Embedding |
+| Pre-attention residual | Residual Stream |
 | Attention update | Attention |
 | Attention residual sum | Residual Stream |
 | First normalized output | Residual Stream |
@@ -126,26 +141,175 @@ locations are:
 | FFN residual sum | Residual Stream |
 | Final block output | Residual Stream |
 
-After a successful analysis, the **Location** and **Token position** selectors
-are filled in and default to the **Final block output** of the last processed
-prompt token. The model diagram highlights the selected location, a short
-plain-language explanation describes what the tensor contains, and three
-coordinated Plotly views show token magnitudes, the token-by-dimension tensor,
-and the selected token's dimension distribution. Token labels include their
-positions, so repeated text remains distinguishable. Click a token-magnitude
-bar or use the position-aware selector to change the selected token. Changing
-either selector re-renders from the captured data only and never runs the model
-again.
+The topology diagram follows the computation rather than presenting a linear
+list. Token and position embeddings enter the pre-attention residual, one
+uninterrupted horizontal line carries the residual stream, and the attention
+and feed-forward paths branch above it. Each branch returns through an explicit
+addition node, followed by its computationally correct post-norm stage. Only
+the ten captured tensors are buttons; vocabulary projection and softmax are
+shown as non-interactive output stages. Selecting a diagram node or a grouped
+navigator entry changes location in one click. Navigator rows show the exact
+captured matrix shape, including the wider FFN hidden dimension.
 
-The heatmap reports its visible zero-centered range. The optional percentile
-clipping control changes only the displayed color bounds; captured values and
-the distribution remain unchanged. Normalized locations explain that their
-token magnitudes may appear nearly flat because layer normalization fixes the
-feature scale.
+Use **Pin current as A** to hold the current location as the comparison
+reference. The next location selected from the diagram, navigator, or dropdown
+immediately becomes **B**; no second confirmation or prompt run is needed. A
+and B always come from the same in-memory prompt capture. The diagram and
+navigator label both locations explicitly with monochrome A/B markers rather
+than relying on color. Select A again or press **Unpin A** to leave comparison
+mode.
+
+After a successful analysis, the **Internal location** selector opens at the
+**Final block output** with no token positions selected. The initial activation
+field is one rectangular overview: every processed token is a row and every
+source dimension is a column, with no reshaping or padding. Hover shows the
+token position, token text, dimension index, and unrounded raw activation value.
+Long captures retain a legible row height and scroll vertically through the
+workspace, including the model maximum of 80 tokens.
+
+Click any overview cell to toggle its entire token row; no Ctrl, Shift, or other
+modifier is required. The first selected row opens token detail automatically,
+and clearing the final token in **Token positions** returns to the overview.
+Selections are identities by 0-based token position, so repeated token text is
+unambiguous and the same positions stay selected while navigating locations.
+Black outlines indicate selected structure without introducing another data
+color.
+
+The fixed diverging color scale maps negative values to purple, zero to white,
+and positive values to orange. **Scale scope** defaults to **Location**, using
+the exact symmetric range of the complete current location. **Capture** uses one
+range across every captured location. **Selection** becomes available only after
+one or more tokens are selected and uses those rows. The same resolved bounds
+are passed to the overview and selected-token detail views so colors remain
+comparable when changing views.
+
+During comparison, raw A and B activations are shown side by side in both the
+all-token overview and selected-token detail modes. Token selection is shared:
+changing it updates both locations together. Their symmetric color bounds are
+pooled according to the active **Scale scope**. When the complete A and B tensor
+shapes match exactly, a full-width signed **B - A** delta is also shown with its
+own symmetric zero-centered bounds. If the shapes differ, such as an FFN hidden
+tensor whose width differs from the residual width, both raw tensors remain
+available and the app reports their exact shapes and why delta is disabled.
+Subtraction never broadcasts, truncates, projects, pads, or otherwise coerces
+incompatible tensors.
+
+**Square** is the default detail mode. It keeps dimensions in source order in a
+near-square row-major map, shows unused cells in gray as non-data padding, and
+explicitly warns that two-dimensional adjacency is artificial. **Indexed**
+shows one unpadded row per selected token with dimensions in literal increasing
+order. Both modes hover the exact stored raw value rather than a rounded chart
+value.
+
+Click a detail cell to pin one exact `(token position, dimension)` measurement;
+clicking another detail cell replaces it. The black cell outline and metadata
+show the pinned identity and its raw value at the current location. The identity
+persists while navigating locations whose tensor width contains that dimension.
+If a location is too narrow, the pin is cleared and the metadata explains the
+incompatible dimension and shape. Overview clicks only select rows and cannot
+create measurement pins.
+
+The heatmap reports its visible zero-centered range. Full-range display is the
+default. **Clip extremes** changes only the color bounds to the 1st-99th
+percentile; captured values, hover values, statistics, and distributions remain
+unchanged. While clipping is active, both the persistent range warning and the
+chart subtitle disclose it. Selecting tokens opens magnitude, detail, and
+distribution views; changing selectors re-renders stored capture data without
+running the model again.
 
 Captured tensors live in memory for the session only. They are cleared when a
-new checkpoint is loaded, replaced by a fresh analysis, or dropped after a
-failed analysis.
+new checkpoint is loaded or replaced by a successfully rendered fresh analysis;
+token selections and pinned measurements reset with that successful
+replacement. A failed analysis leaves the previous valid capture and inspection
+views active. Selection, detail-mode, and measurement changes only re-render the
+stored capture and never rerun inference.
+
+Checkpoint replacement reports validation, model loading, and rendering stages;
+prompt replacement reports validation, tracing, and rendering. Concise errors
+appear beside the initiating control, with exception type and message available
+in the adjacent collapsed technical-details section.
+
+## Open A Second-Monitor Diagnostics Window
+
+**Open diagnostics** in the metadata inspector opens a named, same-origin popup
+for second-monitor use. The main workbench remains the sole controller: the
+popup is read-only, has no state-changing controls, and never talks to the
+server or to a second Gradio session.
+
+- Clicking **Open diagnostics** again focuses the same named window; closing,
+  reopening, resizing, or a blocked popup never damages the main session.
+- The popup shows the current checkpoint, prompt, location, and selection
+  context, an always-available token-magnitude chart (all tokens, selection
+  highlighted), and a distribution chart for the selected tokens only. With no
+  selection the distribution panel keeps a stable explanatory empty state.
+- The two charts sit side by side when the window is wide and stack when it is
+  narrow.
+- The main workbench publishes one versioned, atomic payload over postMessage
+  on every relevant change. The popup validates the exact origin and ignores
+  stale revisions, so context and charts never mix revisions.
+- Plotly is served from the installed local package (same origin, no CDN, no
+  telemetry, no localStorage, no second Gradio session), and Gradio run history
+  stays disabled so captured diagnostics are not persisted in browser history.
+- Each chart card has **PNG** and **SVG** download buttons. They export the
+  already-rendered figure entirely in the browser through the same local
+  Plotly bundle (no Kaleido, no external service) and are disabled while the
+  corresponding chart is not on screen.
+
+## Export Research Artifacts
+
+**Export artifacts…** in the metadata inspector (**Runtime and diagnostics**)
+opens an accessible dialog. It never auto-runs: choose a scope and a format
+explicitly, then press **Download**. Options that are not valid for the current
+state are disabled with an inline reason.
+
+Scopes:
+
+- **Current selection** exports the selected token rows at the current
+  location. It is disabled until at least one token position is selected.
+- **Current location** exports every captured token at the current location.
+- **Comparison** exports pinned **A** and the current location **B**. It is
+  disabled until A is pinned and a different location is selected as B.
+
+Formats:
+
+- **CSV** is deterministic long-form data with one row per token position and
+  source dimension (sorted by token position, then dimension). Columns are
+  `token_position`, `token_text`, `token_id`, `location_key`,
+  `source_dimension_index`, and `raw_value`. Comparison rows add a `side`
+  column (`A`, `B`, and `delta` when included). A single `# `-prefixed comment
+  line carries the same structured JSON metadata embedded in NPZ files.
+- **NumPy .npz** preserves the source matrices as two-dimensional float64
+  arrays (`values`, or `values_a`/`values_b`/`delta` for comparisons) and
+  embeds the structured metadata as `metadata.json` inside the same archive.
+
+The structured JSON metadata records the checkpoint path, architecture,
+compute device, and model configuration; the processed prompt with every token
+position/text/ID; the exported location key and label; the literal source
+dimension indices; the current selection; any pinned measurement (with its raw
+value when the dimension exists); and the comparison A/B sides. When a delta
+is exported it is the exact signed `B - A`; incompatible A/B tensors (for
+example an FFN hidden width that differs from the residual width) refuse the
+delta export with a precise reason while raw A and B remain exportable. The
+delta checkbox is disabled in that case.
+
+Exported values are always the raw captured floats. Display clipping and
+square-grid padding are display-only concerns and never alter or appear in the
+raw data: there are no padded cells, and values are never clipped. CSV and NPZ
+metadata mark this explicitly.
+
+PNG/SVG figures are generated in the browser from the already-rendered Plotly
+charts (no Kaleido, no CDN). The dialog offers the **active activation view**
+(the chart(s) currently on the canvas, including comparison A/B/delta),
+**token magnitudes**, and **selected-token distribution**; targets whose chart
+is not currently rendered are disabled. The diagnostics window provides the
+same PNG/SVG downloads for its two charts.
+
+Raw files are generated strictly on request: each **Download** press builds one
+artifact in memory and returns it as a temporary browser download; nothing is
+written to disk and nothing is persisted automatically. Captured tensors and
+selection state remain session-only, as elsewhere in the app. This is the only
+way raw data leaves the app, so exports are easy to tell apart from automatic
+persistence (there is none).
 
 ## Checkpoint Folder
 

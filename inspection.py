@@ -8,6 +8,7 @@ from checkpoint import LoadedCheckpoint
 
 
 RESIDUAL_STREAM = "Residual Stream"
+EMBEDDING = "Embedding"
 ATTENTION = "Attention"
 FFN = "FFN"
 
@@ -29,8 +30,20 @@ class LocationSpec:
 
 LOCATIONS: Tuple[LocationSpec, ...] = (
     LocationSpec(
+        key="token_embedding",
+        label="Token embeddings",
+        category=EMBEDDING,
+        explanation="The learned embedding vector looked up for each prompt token.",
+    ),
+    LocationSpec(
+        key="position_embedding",
+        label="Position embeddings",
+        category=EMBEDDING,
+        explanation="The learned position vector added at each prompt position.",
+    ),
+    LocationSpec(
         key="embedding",
-        label="Token + position embeddings",
+        label="Pre-attention residual",
         category=RESIDUAL_STREAM,
         explanation=(
             "The token and position embeddings summed for every prompt token. "
@@ -155,7 +168,10 @@ def capture_locations(checkpoint: LoadedCheckpoint, token_ids) -> CapturedRun:
 
     token_ids = ids[None, :]
     model = checkpoint.model
-    embeddings = model.get_layer("token_and_position_embedding")(token_ids)
+    embedding_layer = model.get_layer("token_and_position_embedding")
+    token_embeddings = embedding_layer.token_emb(token_ids)
+    position_embeddings = embedding_layer.pos_emb(tf.range(token_count))
+    embeddings = token_embeddings + position_embeddings
     steps, _attention_scores = model.get_layer(
         "transformer_block"
     ).call_steps(embeddings, training=False)
@@ -163,6 +179,8 @@ def capture_locations(checkpoint: LoadedCheckpoint, token_ids) -> CapturedRun:
     probabilities = model.get_layer("token_probabilities")(block_output)
 
     locations = {
+        "token_embedding": tf.squeeze(token_embeddings, axis=0),
+        "position_embedding": position_embeddings,
         "embedding": tf.squeeze(embeddings, axis=0),
         **{
             key: tf.squeeze(tensor, axis=0)

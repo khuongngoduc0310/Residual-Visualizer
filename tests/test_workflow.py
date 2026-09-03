@@ -55,13 +55,18 @@ def test_cpu_checkpoint_to_all_internal_charts(tmp_path, monkeypatch):
         heatmap = app.render_activation_heatmap(values, token_labels, 3, False)
         distribution = app.render_token_distribution(values[3], 3, token_labels[3])
         np.testing.assert_allclose(magnitude.data[0].y, token_magnitudes(values))
-        np.testing.assert_allclose(heatmap.data[0].z, values)
+        side = int(np.ceil(np.sqrt(values.shape[1])))
+        assert len(heatmap.data) == 1
+        assert heatmap.data[0].z.shape == (side, side)
+        np.testing.assert_allclose(
+            heatmap.data[0].z.flat[: values.shape[1]], values[3]
+        )
         np.testing.assert_allclose(
             distribution.data[0].x,
             values[3],
         )
         assert all(isinstance(figure, go.Figure) for figure in (magnitude, heatmap, distribution))
 
-    assert outputs[5]["value"] == "output_norm"
-    assert outputs[6]["value"] == "3"
+    assert outputs[6]["value"] == "output_norm"
+    assert outputs[7]["value"] == []
     assert checkpoint.config == config
