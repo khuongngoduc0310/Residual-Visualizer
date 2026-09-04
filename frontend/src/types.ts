@@ -118,9 +118,6 @@ export interface CaptureStats {
 export interface ScaleInfo {
   lower: number;
   upper: number;
-  clipped: boolean;
-  family: NodeFamily;
-  source: "family" | "matrix";
 }
 
 export interface FigureSpec {

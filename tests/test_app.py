@@ -345,9 +345,11 @@ def test_inspect_returns_capture_defaults(tmp_path):
     assert payload["shape"] == {"seq_len": 3, "width": 8}
     assert set(payload["capture"]) == {"min", "mean", "max"}
     assert payload["capture"]["max"] >= payload["capture"]["min"]
-    assert payload["scale"]["clipped"] is False
-    assert payload["scale"]["lower"] <= payload["scale"]["upper"]
-    assert payload["scale"]["source"] == "family"
+    assert payload["scale"] == {
+        "lower": -payload["scale"]["upper"],
+        "upper": payload["scale"]["upper"],
+    }
+    assert payload["scale"]["upper"] >= 0
     assert payload["tile"] == {"rows": 2, "cols": 4}
     assert "data" in payload["map_figure"]
     assert "layout" in payload["map_figure"]
@@ -364,15 +366,16 @@ def test_inspect_uses_stored_data_without_running_the_model(tmp_path):
     checkpoint = manager.loaded_state.checkpoint
     object.__setattr__(checkpoint, "model", ExplodingModel())
 
-    payload = app.inspect_node_payload(manager, "ffn_hidden", 1, True)
+    payload = app.inspect_node_payload(manager, "ffn_hidden", 1)
 
     assert payload["state"] == "ready"
     assert payload["node"]["key"] == "ffn_hidden"
     assert payload["node"]["family"] == "hidden"
     assert payload["figure_kind"] == "hidden"
     assert payload["selected_position"] == 1
+    assert set(payload["scale"]) == {"lower", "upper"}
     assert payload["scale"]["lower"] == 0.0
-    assert payload["scale"]["clipped"] is True
+    assert payload["scale"]["upper"] > 0.0
     assert payload["map_figure"]["data"]
     assert payload["tile"] == {"rows": 2, "cols": 4}
 
@@ -380,7 +383,7 @@ def test_inspect_uses_stored_data_without_running_the_model(tmp_path):
 def test_inspect_can_switch_back_to_the_default_node(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    payload = app.inspect_node_payload(manager, "output_norm", 0, False)
+    payload = app.inspect_node_payload(manager, "output_norm", 0)
 
     assert payload["node"]["key"] == "output_norm"
     assert payload["node"]["label"] == "Layer norm \u00b7 block output"
@@ -390,8 +393,8 @@ def test_inspect_can_switch_back_to_the_default_node(tmp_path):
 def test_inspect_clamps_token_position_to_the_capture(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    payload = app.inspect_node_payload(manager, "output_norm", 999, False)
-    high = app.inspect_node_payload(manager, "output_norm", -3, False)
+    payload = app.inspect_node_payload(manager, "output_norm", 999)
+    high = app.inspect_node_payload(manager, "output_norm", -3)
 
     assert payload["selected_position"] == 2
     assert high["selected_position"] == 0
@@ -400,32 +403,30 @@ def test_inspect_clamps_token_position_to_the_capture(tmp_path):
 def test_inspect_reports_an_unknown_node(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    payload = app.inspect_node_payload(manager, "not_a_node", 0, False)
+    payload = app.inspect_node_payload(manager, "not_a_node", 0)
 
     assert payload["state"] == "error"
     assert "Unknown stream node" in payload["message"]
 
 
-def test_family_scale_is_shared_across_stream_nodes(tmp_path):
+def test_each_node_normalizes_its_own_color_scale(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    embedding = app.inspect_node_payload(manager, "embedding", None, True)
+    embedding = app.inspect_node_payload(manager, "embedding", None)
     after_attention = app.inspect_node_payload(
-        manager, "attention_residual", None, True
+        manager, "attention_residual", None
     )
 
-    assert embedding["scale"]["source"] == "family"
-    assert after_attention["scale"]["source"] == "family"
-    assert embedding["scale"]["family"] == after_attention["scale"]["family"]
-    assert embedding["scale"]["family"] == "stream_raw"
-    assert embedding["scale"]["lower"] == after_attention["scale"]["lower"]
-    assert embedding["scale"]["upper"] == after_attention["scale"]["upper"]
+    for payload in (embedding, after_attention):
+        assert set(payload["scale"]) == {"lower", "upper"}
+        assert payload["scale"]["lower"] == -payload["scale"]["upper"]
+    assert embedding["scale"]["upper"] != after_attention["scale"]["upper"]
 
 
 def test_attention_pattern_node_returns_pattern_view(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    payload = app.inspect_node_payload(manager, "attention_pattern", 1, False)
+    payload = app.inspect_node_payload(manager, "attention_pattern", 1)
 
     assert payload["state"] == "ready"
     assert payload["node"]["kind"] == "pattern"
@@ -440,7 +441,7 @@ def test_embedding_components_node_views(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
     for key in EMBEDDING_COMPONENTS:
-        payload = app.inspect_node_payload(manager, key, 0, False)
+        payload = app.inspect_node_payload(manager, key, 0)
         assert payload["state"] == "ready"
         assert payload["node"]["kind"] == "component"
         assert payload["node"]["family"] == "components"
@@ -455,7 +456,7 @@ def test_readout_node_returns_topk_rows_and_entropy(tmp_path):
     manager, payload = analyze_fixture(tmp_path)
     analysis = manager.inspection_session.analysis
 
-    inspected = app.inspect_node_payload(manager, "readout", 2, False)
+    inspected = app.inspect_node_payload(manager, "readout", 2)
 
     assert inspected["state"] == "ready"
     assert inspected["node"]["kind"] == "readout"
@@ -476,7 +477,7 @@ def test_every_node_renders_a_view_after_analysis(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
     for node in STREAM_NODES:
-        payload = app.inspect_node_payload(manager, node.key, 0, False)
+        payload = app.inspect_node_payload(manager, node.key, 0)
         assert payload["state"] == "ready", node.key
         assert payload["node"]["trace_index"] == node_keys().index(node.key)
         assert payload["selected_position"] == 0
@@ -487,9 +488,9 @@ def test_load_payloads_are_json_serializable(tmp_path):
     manager = app.ModelManager(device_detector=lambda: fake_device())
     loaded = app.load_model_payload(manager, str(tmp_path))
     app.analyze_prompt_payload(manager, "hello , world")
-    activation = app.inspect_node_payload(manager, "ffn_update", 1, True)
-    pattern = app.inspect_node_payload(manager, "attention_pattern", 1, False)
-    readout = app.inspect_node_payload(manager, "readout", 2, False)
+    activation = app.inspect_node_payload(manager, "ffn_update", 1)
+    pattern = app.inspect_node_payload(manager, "attention_pattern", 1)
+    readout = app.inspect_node_payload(manager, "readout", 2)
 
     for payload in (loaded, activation, pattern, readout):
         json.loads(json.dumps(payload))

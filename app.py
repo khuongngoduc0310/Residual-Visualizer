@@ -17,7 +17,6 @@ from analysis import AnalysisError, PromptAnalysis, analyze_prompt, display_text
 from checkpoint import CheckpointError, LoadedCheckpoint, load_checkpoint
 from charts import (
     display_bounds,
-    display_bounds_union,
     grid_shape,
     render_entropy_strip,
     render_pattern_heatmap,
@@ -38,12 +37,6 @@ from inspection import (
 from model import ARCHITECTURE_NAME, ModelConfig
 
 NEXT_TOKEN_TOP_K = 15
-SHARED_FAMILIES = {
-    "components",
-    "stream_raw",
-    "updates",
-    "stream_norm",
-}
 
 LOGGER = logging.getLogger(__name__)
 LOCAL_SERVER_NAME = "127.0.0.1"
@@ -433,16 +426,6 @@ def _node_info_payload(key: str) -> dict:
     }
 
 
-def _family_arrays(analysis: PromptAnalysis, family: str):
-    from inspection import family_keys
-
-    return [
-        analysis.capture.locations[key]
-        for key in family_keys(family)
-        if key in analysis.capture.locations
-    ]
-
-
 def _entropy(probabilities: np.ndarray) -> np.ndarray:
     positive = probabilities > 0.0
     logs = np.zeros_like(probabilities)
@@ -495,7 +478,6 @@ def inspect_node_payload(
     manager: ModelManager,
     node_key: Optional[str] = None,
     token_position: Optional[int] = None,
-    clipped: bool = False,
 ) -> dict:
     """Render the chosen stream node from stored captures; never reruns the
     model."""
@@ -556,19 +538,12 @@ def inspect_node_payload(
     }
 
     if kind == "hidden":
-        flat = values.reshape(-1)
-        if bool(clipped):
-            upper = float(np.percentile(flat, 99.0))
-        else:
-            upper = float(np.max(flat))
+        upper = float(np.max(values))
         if upper <= 0.0:
             upper = 1.0
         payload["scale"] = {
             "lower": 0.0,
             "upper": upper,
-            "clipped": bool(clipped),
-            "family": spec.family,
-            "source": "matrix",
         }
         payload["map_figure"] = _figure_payload(
             render_token_map_row(
@@ -583,20 +558,10 @@ def inspect_node_payload(
             )
         )
     else:
-        family = spec.family
-        shared = family in SHARED_FAMILIES
-        if shared:
-            lower, upper = display_bounds_union(
-                _family_arrays(analysis, family), bool(clipped)
-            )
-        else:
-            lower, upper = display_bounds(values, bool(clipped))
+        lower, upper = display_bounds(values)
         payload["scale"] = {
             "lower": float(lower),
             "upper": float(upper),
-            "clipped": bool(clipped),
-            "family": family,
-            "source": "family" if shared else "matrix",
         }
         payload["map_figure"] = _figure_payload(
             render_token_map_row(
@@ -607,8 +572,7 @@ def inspect_node_payload(
                 colorscale="RdBu",
                 title=(
                     f"Token activation maps (visible range: "
-                    f"{lower:.4f} to {upper:.4f}"
-                    + (", percentile clipped)" if bool(clipped) else ")")
+                    f"{lower:.4f} to {upper:.4f})"
                 ),
             )
         )
@@ -674,10 +638,9 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
         def inspect_endpoint(
             node_key: Optional[str] = None,
             token_position: Optional[int] = None,
-            clipped: bool = False,
         ) -> dict:
             return inspect_node_payload(
-                manager, node_key, token_position, clipped
+                manager, node_key, token_position
             )
 
         def get_options(_unused: str = "") -> dict:

@@ -87,10 +87,11 @@ engine underneath it; it stays bound to localhost with public sharing disabled:
 python app.py
 ```
 
-Open `http://127.0.0.1:7860` in a browser. Enter the extracted folder
-path in **Server path** and press **Load Model**. The app validates all three
-files before showing the model details and reports CUDA GPU or CPU based on
-TensorFlow's actual device visibility.
+Open `http://127.0.0.1:7860` in a browser. The **Server path** is pre-filled
+with the included development checkpoint; replace it with your extracted
+folder path and press **Load Model**. The app validates all three files before
+showing the model details and reports CUDA GPU or CPU based on TensorFlow's
+actual device visibility.
 
 For frontend development, run the engine and the Vite dev server together:
 
@@ -105,10 +106,10 @@ Open `http://127.0.0.1:5173`; Vite proxies the model endpoints to the engine on
 Python or the model.
 
 For a quick UI check, use a desktop browser width of at least 1280px. Verify
-that the wiring diagram shows one residual line with the attention and FFN
-branches, that analyzing a prompt selects the default **Layer norm · block
-output** node, and that clicking graph chips and the ◀ Previous / Next ▶
-controls move between captured states.
+that expanding the model diagram shows one residual line with the attention
+and FFN branches, that analyzing a prompt selects the default **Layer norm ·
+block output** node, and that clicking the node-strip chips and the ◀ Previous
+/ Next ▶ controls move between captured states.
 
 Loading a new checkpoint first releases the current model and clears the old
 details. If the replacement fails, no model remains active. TensorFlow may keep
@@ -140,12 +141,16 @@ decomposed token and position embeddings, the residual-stream states, the
 attention and FFN updates, the two layer norms, the causal attention pattern
 (mean over heads), and the FFN hidden activation.
 
-The page is organized around a wiring diagram. The residual stream is one
-horizontal line from the embeddings through the two "add" junctions and layer
-norms to the readout. The attention and FFN blocks hang off that line as
-parallel branches: they read the stream, compute, and write their output back
-at the add junction. Every chip in the diagram is a captured state you can
-select:
+The page is organized around the residual stream, but it keeps the map on
+screen: a compact **node strip** of chips sits directly above the captured
+state, and the full wiring diagram is collapsed by default so the strip and
+heatmap both fit the viewport. Press **Show model diagram** to expand the
+wiring any time. The residual stream is one horizontal line from the
+embeddings through the two "add" junctions and layer norms to the readout. The
+attention and FFN blocks hang off that line as parallel branches: they read
+the stream, compute, and write their output back at the add junction. Every
+node below is a captured state you can select either from the node strip or
+from its chip in the expanded diagram:
 
 | Node | Kind | Notes |
 | --- | --- | --- |
@@ -162,23 +167,23 @@ select:
 | Layer norm block output | ln | the value the readout reads |
 | Readout probabilities | readout | top-K next tokens + entropy |
 
-Exactly one node's view is rendered at a time. Selecting a chip — or stepping
-with ◀ Previous / Next ▶, the trace dropdown, or the token chips — shows that
-node's captured tensor as one **row of square heatmaps**: each token gets its
-own square tile in a single heatmap, the selected token's tile is outlined in
-red, and the row scrolls horizontally when the prompt is long. A token's
-width-256 vector is laid out row-major as a 16×16 grid (other widths use the
-factor pair closest to a square). Select a token from the chips, the position
-dropdown, or by clicking any cell of its tile. Changing any selection
-re-renders from captured data only and never runs the model again.
+Exactly one node's view is rendered at a time. Selecting a chip from the node
+strip (or the expanded diagram), or stepping with ◀ Previous / Next ▶ or the
+token chips, shows that node's captured tensor as one **row of square
+heatmaps**: each token gets its
+own square tile in a single heatmap with a clear gap between tiles, and the
+selected token's tile is outlined in red. The plot always fits the panel
+width; scroll the mouse wheel or use the mode bar to zoom in when you want a
+closer look. A token's width-256 vector is laid out row-major as a 16×16 grid
+(other widths use the factor pair closest to a square). Select a token from the
+chips, the position dropdown, or by clicking any cell of its tile. Changing any
+selection re-renders from captured data only and never runs the model again.
 
-Color scales are shared within a family so magnitudes stay comparable while you
-step along the stream: the three raw stream states, the two updates, the two
-layer-norm outputs, and the two embedding components each use one scale. The
-**Clip extremes** percentile control and the family scale only affect displayed
-color bounds; captured values are unchanged. Normalized nodes explain that
-their magnitudes may look nearly flat because layer normalization fixes the
-feature scale.
+Color is normalized per node: each activation node's heatmap is scaled to its
+own zero-centered range (the symmetric max-absolute-value of that tensor), so
+every node uses its full colorbar and stream/update/norm nodes are not washed
+out by each other's magnitudes. Normalized nodes explain that their magnitudes
+may look nearly flat because layer normalization fixes the feature scale.
 
 The readout node renders for the selected token: the most likely next tokens as
 horizontal bars and a per-token entropy strip showing uncertainty across the

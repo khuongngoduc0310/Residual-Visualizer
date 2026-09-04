@@ -50,7 +50,7 @@ def test_cpu_checkpoint_to_all_stream_node_views(tmp_path):
             continue
         values = analysis.capture.locations[node.key]
         assert values.shape[0] == analysis.token_count
-        payload = app.inspect_node_payload(manager, node.key, 3, False)
+        payload = app.inspect_node_payload(manager, node.key, 3)
         assert payload["state"] == "ready"
         assert payload["selected_position"] == 3
         if node.kind == "pattern":
@@ -68,11 +68,21 @@ def test_cpu_checkpoint_to_all_stream_node_views(tmp_path):
         assert "layout" in map_figure
         token_count = analysis.token_count
         rows, cols = tile["rows"], tile["cols"]
-        z = np.asarray(map_figure["data"][0]["z"], dtype=float)
-        assert z.shape == (rows, cols * token_count)
-        assert not np.isnan(z).any()
+        z_rows = map_figure["data"][0]["z"]
+        assert len(z_rows) == rows
+        stride = cols + (1 if token_count > 1 else 0)
+        assert len(z_rows[0]) == stride * token_count - (
+            1 if token_count > 1 else 0
+        )
+        z = np.asarray(z_rows, dtype=float)  # None gap cells become NaN
+        gap_columns = set()
+        for index in range(1, token_count):
+            gap_columns.add(index * stride - 1)
+        for row in range(rows):
+            for column in gap_columns:
+                assert np.isnan(z[row, column])
         for index in range(token_count):
-            start = index * cols
+            start = index * stride
             np.testing.assert_allclose(
                 z[:, start : start + cols],
                 values[index].reshape(rows, cols),

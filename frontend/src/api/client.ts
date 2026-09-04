@@ -21,7 +21,6 @@ export function analyzePrompt(prompt: string): Promise<AnalyzePayload> {
 export function inspectNode(
   nodeKey: string | null,
   tokenPosition: number | null,
-  clipped: boolean,
 ): Promise<InspectPayload> {
-  return callApi("inspect_node", [nodeKey, tokenPosition, clipped]);
+  return callApi("inspect_node", [nodeKey, tokenPosition]);
 }

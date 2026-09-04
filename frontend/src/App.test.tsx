@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { App } from "./App";
+import { App, DEFAULT_CHECKPOINT } from "./App";
 import type {
   AnalyzePayload,
   GraphNode,
@@ -131,7 +131,7 @@ function inspectFixture(key: string | null): InspectPayload {
     ],
     shape: { seq_len: 2, width: 8 },
     capture: { min: -1, mean: 0, max: 1 },
-    scale: { lower: -1, upper: 1, clipped: false, family: node.family, source: "family" },
+    scale: { lower: -1, upper: 1 },
     tile: node.feature_axis ? { rows: 2, cols: 4 } : null,
     figure_kind: node.kind === "readout" ? "readout_topk" : "activation",
     map_figure: node.feature_axis ? { data: [{}], layout: {} } : null,
@@ -154,9 +154,13 @@ beforeEach(() => {
 
 describe("App", () => {
   it("loads the stream graph on start", async () => {
+    const user = userEvent.setup();
     render(<App />);
 
     await waitFor(() => expect(engine.getOptions).toHaveBeenCalledTimes(1));
+    await user.click(
+      screen.getByRole("button", { name: "Show model diagram" }),
+    );
     expect(await screen.findByTestId("residual-graph")).toBeInTheDocument();
     expect(screen.getByTestId("residual-graph")).toHaveTextContent(
       "Residual stream input",
@@ -167,7 +171,10 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.type(screen.getByLabelText(/Server path/), "C:\\ckpt");
+    const pathInput = screen.getByLabelText(/Server path/);
+    expect(pathInput).toHaveValue(DEFAULT_CHECKPOINT);
+    await user.clear(pathInput);
+    await user.type(pathInput, "C:\\ckpt");
     await user.click(screen.getByRole("button", { name: "Load model" }));
 
     await waitFor(() =>
@@ -211,8 +218,11 @@ describe("App", () => {
         "Layer norm block output",
       ),
     );
+    await user.click(
+      screen.getByRole("button", { name: "Show model diagram" }),
+    );
 
-    const graph = screen.getByTestId("residual-graph");
+    const graph = await screen.findByTestId("residual-graph");
     const chip = graph.querySelector('[data-node="attention_residual"]');
     expect(chip).not.toBeNull();
     await user.click(chip as Element);
@@ -221,7 +231,35 @@ describe("App", () => {
       expect(engine.inspectNode).toHaveBeenLastCalledWith(
         "attention_residual",
         expect.anything(),
-        false,
+      ),
+    );
+    expect(await screen.findByTestId("node-label")).toHaveTextContent(
+      "Residual stream after attention",
+    );
+  });
+
+  it("chooses a node from the strip above the map", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(screen.getByLabelText(/Prompt/), "hello ,");
+    await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("node-label")).toHaveTextContent(
+        "Layer norm block output",
+      ),
+    );
+
+    const strip = screen.getByTestId("node-strip");
+    expect(strip).toBeInTheDocument();
+    const chip = strip.querySelector('[data-node="attention_residual"]');
+    expect(chip).not.toBeNull();
+    await user.click(chip as Element);
+
+    await waitFor(() =>
+      expect(engine.inspectNode).toHaveBeenLastCalledWith(
+        "attention_residual",
+        expect.anything(),
       ),
     );
     expect(await screen.findByTestId("node-label")).toHaveTextContent(
@@ -249,7 +287,6 @@ describe("App", () => {
       expect(engine.inspectNode).toHaveBeenLastCalledWith(
         "readout",
         expect.anything(),
-        false,
       ),
     );
     expect(await screen.findByTestId("node-label")).toHaveTextContent(
@@ -276,7 +313,6 @@ describe("App", () => {
       expect(engine.inspectNode).toHaveBeenLastCalledWith(
         "output_norm",
         0,
-        false,
       ),
     );
   });

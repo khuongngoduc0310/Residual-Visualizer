@@ -128,6 +128,13 @@ button {
   gap: 16px;
 }
 
+.ct-panel-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .ct-panel-title {
   font-family: var(--serif);
   font-size: 19px;
@@ -368,8 +375,37 @@ button {
 .ct-graph-svg {
   display: block;
   width: 100%;
-  min-width: 980px;
+  min-width: 1180px;
   height: auto;
+}
+
+.ct-graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ct-graph-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.ct-graph-legend-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  border: 1.5px solid transparent;
+}
+
+.ct-graph-legend-selected {
+  background: #ffffff;
+  border-color: #dc2626;
+  box-shadow: 0 0 0 1px #fca5a5;
 }
 
 .ct-graph-note {
@@ -403,6 +439,44 @@ button {
   color: var(--muted-2);
 }
 
+.ct-node-strip-wrap {
+  margin: 12px 0 2px;
+}
+
+.ct-node-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ct-node-chip {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.ct-node-chip:hover {
+  border-color: var(--blue-700);
+  color: var(--blue-700);
+}
+
+.ct-node-chip-selected {
+  background: var(--blue-700);
+  border-color: var(--blue-700);
+  color: #ffffff;
+}
+
+.ct-node-chip-selected:hover {
+  color: #ffffff;
+}
+
 .ct-explanation {
   margin: 0 0 4px;
   font-size: 13px;
@@ -434,22 +508,6 @@ button {
   min-width: 210px;
 }
 
-.ct-checkbox {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 13px;
-  color: var(--ink-soft);
-  padding-bottom: 7px;
-}
-
-.ct-two-up {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 10px;
-  margin: 4px 0 10px;
-}
-
 .ct-stat-box {
   background: var(--panel-soft);
   border: 1px solid var(--line-soft);
@@ -459,23 +517,6 @@ button {
 
 .ct-node-view {
   margin-top: 4px;
-}
-
-.ct-map-scroll {
-  overflow-x: auto;
-  background: #ffffff;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 10px 8px;
-}
-
-.ct-map-stage {
-  min-width: 100%;
-}
-
-.ct-plot-map {
-  width: 100%;
-  height: 100%;
 }
 
 .ct-stat-box-single {
@@ -505,7 +546,8 @@ button {
 
 .ct-plot-main {
   width: 100%;
-  height: 460px;
+  height: clamp(340px, calc(100vh - 520px), 780px);
+  min-height: 340px;
 }
 
 .ct-plot-side {

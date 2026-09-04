@@ -1,9 +1,5 @@
-import type { CSSProperties } from "react";
 import type { InspectPayload } from "../types";
 import { PlotlyFigure } from "./PlotlyFigure";
-
-const CELL_PX = 18;
-const LABEL_RESERVE = 130;
 
 interface NodeViewProps {
   inspect: InspectPayload;
@@ -23,59 +19,24 @@ export function NodeView({ inspect, onSelectPosition }: NodeViewProps) {
     primary = inspect.map_figure;
   }
 
-  const showTokenRowMap =
-    kind !== null &&
-    kind !== "pattern" &&
-    kind !== "readout" &&
-    inspect.map_figure !== null &&
-    inspect.shape !== null &&
-    inspect.tile !== null;
-
-  let stageStyle: CSSProperties | undefined;
-  if (showTokenRowMap && inspect.shape && inspect.tile) {
-    const columns = inspect.shape.seq_len * inspect.tile.cols;
-    stageStyle = {
-      width: `${Math.max(320, columns * CELL_PX)}px`,
-      height: `${inspect.tile.rows * CELL_PX + LABEL_RESERVE}px`,
-    };
-  }
-
   return (
     <div className="ct-node-view">
-      {showTokenRowMap ? (
-        <div className="ct-map-scroll" data-testid="token-map">
-          <div className="ct-map-stage" style={stageStyle}>
-            <PlotlyFigure
-              figure={primary}
-              onSelectPosition={onSelectPosition}
-              className="ct-plot ct-plot-map"
-              data-testid="node-primary-plot"
-            />
-          </div>
-        </div>
-      ) : (
-        <div className="ct-chart-main">
-          <PlotlyFigure
-            figure={primary}
-            onSelectPosition={kind === "readout" ? undefined : onSelectPosition}
-            className="ct-plot ct-plot-main"
-            data-testid="node-primary-plot"
-          />
-        </div>
-      )}
+      <div className="ct-chart-main">
+        <PlotlyFigure
+          figure={primary}
+          onSelectPosition={kind === "readout" ? undefined : onSelectPosition}
+          className="ct-plot ct-plot-main"
+          data-testid="node-primary-plot"
+        />
+      </div>
 
       {scale && (
         <p className="ct-plot-caption" data-testid="scale-caption">
           Visible range: {scale.lower.toFixed(4)} to {scale.upper.toFixed(4)}
-          {scale.clipped
-            ? " (display clipped to the 1st-99th percentile)"
-            : ""}
-          {scale.source === "family"
-            ? ` · shared ${scale.family} scale`
-            : ""}
           {inspect.tile
             ? ` · each square = one token's ${inspect.shape?.width ?? ""} dims in a ${inspect.tile.rows}×${inspect.tile.cols} grid`
             : ""}
+          {" · scroll to zoom"}
         </p>
       )}
 

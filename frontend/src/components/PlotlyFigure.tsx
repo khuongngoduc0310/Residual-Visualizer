@@ -52,6 +52,7 @@ export function PlotlyFigure({
     const config = {
       responsive: true,
       displaylogo: false,
+      scrollZoom: true,
       modeBarButtonsToRemove: ["lasso2d", "select2d"],
     };
 

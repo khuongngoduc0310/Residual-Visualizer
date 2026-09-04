@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as engine from "./api/client";
 import { CtApiError } from "./api/gradio";
+import { NodeStrip } from "./components/NodeStrip";
+import type { NodeStripItem } from "./components/NodeStrip";
 import { NodeView } from "./components/NodeView";
 import { ResidualGraph } from "./components/ResidualGraph";
 import type {
@@ -13,6 +15,10 @@ import type {
 import "./App.css";
 
 const AWAITING_COPY = "Analyze a prompt to capture every internal location.";
+
+export const DEFAULT_CHECKPOINT =
+  import.meta.env.VITE_DEFAULT_CHECKPOINT ??
+  "C:\\Projects\\Circuit Tracer\\checkpoints\\checkpoint-20260902-204728-v2";
 
 function errorMessage(error: unknown): string {
   return error instanceof CtApiError || error instanceof Error
@@ -27,7 +33,7 @@ function formatCount(value: number | null): string {
 export function App() {
   const [options, setOptions] = useState<OptionsPayload | null>(null);
 
-  const [checkpointPath, setCheckpointPath] = useState("");
+  const [checkpointPath, setCheckpointPath] = useState(DEFAULT_CHECKPOINT);
   const [prompt, setPrompt] = useState("");
   const [loadResult, setLoadResult] = useState<LoadPayload | null>(null);
   const [loadBusy, setLoadBusy] = useState(false);
@@ -42,8 +48,8 @@ export function App() {
   const [inspectError, setInspectError] = useState<string>("");
   const [nodeKey, setNodeKey] = useState<string | null>(null);
   const [tokenPosition, setTokenPosition] = useState<number | null>(null);
-  const [clipped, setClipped] = useState(false);
   const [focused, setFocused] = useState(false);
+  const [diagramOpen, setDiagramOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -76,16 +82,24 @@ export function App() {
   const effectiveKey = nodeKey ?? defaultNodeKey;
   const graphNode = nodeByKey.get(effectiveKey) ?? null;
 
+  const traceItems = useMemo<NodeStripItem[]>(() => {
+    const items: NodeStripItem[] = [];
+    for (const key of graph?.trace ?? []) {
+      const node = nodeByKey.get(key);
+      if (node) items.push({ key, label: node.label });
+    }
+    return items;
+  }, [graph, nodeByKey]);
+
   const runInspect = useCallback(
     async (
       key: string | null,
       position: number | null,
-      clip: boolean,
     ): Promise<InspectPayload> => {
       setInspectBusy(true);
       setInspectError("");
       try {
-        const result = await engine.inspectNode(key, position, clip);
+        const result = await engine.inspectNode(key, position);
         setInspectResult(result);
         if (result.state === "ready" && result.node) {
           setNodeKey(result.node.key);
@@ -135,7 +149,7 @@ export function App() {
       if (result.ok) {
         setNodeKey(null);
         setTokenPosition(null);
-        await runInspect(null, null, clipped);
+        await runInspect(null, null);
       } else {
         setInspectResult(null);
         setNodeKey(null);
@@ -153,24 +167,18 @@ export function App() {
 
   function handleSelectNode(key: string): void {
     if (key === (nodeKey ?? defaultNodeKey)) return;
-    void runInspect(key, tokenPosition, clipped).catch(() => undefined);
+    void runInspect(key, tokenPosition).catch(() => undefined);
   }
 
   function handleSelectToken(position: number): void {
     if (position === tokenPosition) return;
-    void runInspect(effectiveKey, position, clipped).catch(() => undefined);
+    void runInspect(effectiveKey, position).catch(() => undefined);
   }
 
   function handleStep(delta: number): void {
     if (!graphNode) return;
     const target = delta < 0 ? graphNode.prev_key : graphNode.next_key;
-    if (target) void runInspect(target, tokenPosition, clipped);
-  }
-
-  function handleToggleClip(): void {
-    const next = !clipped;
-    setClipped(next);
-    void runInspect(effectiveKey, tokenPosition, next).catch(() => undefined);
+    if (target) void runInspect(target, tokenPosition);
   }
 
   const inspectReady = inspectResult?.state === "ready";
@@ -182,6 +190,8 @@ export function App() {
 
   const modelSummary = loadResult?.loaded ? loadResult.summary : null;
   const hasAnalysis = Boolean(analysis?.ok);
+  const selectedNodeKey =
+    inspectReady && inspectResult?.node ? inspectResult.node.key : effectiveKey;
 
   return (
     <div className={focused ? "ct-page ct-page-focused" : "ct-page"}>
@@ -367,29 +377,41 @@ export function App() {
                   One residual line, two parallel writes
                 </h3>
               </div>
-              <button
-                type="button"
-                className="ct-button ct-button-ghost"
-                onClick={() => setFocused((value) => !value)}
-              >
-                {focused ? "Show controls" : "Focus view"}
-              </button>
+              <div className="ct-panel-head-actions">
+                <button
+                  type="button"
+                  className="ct-button ct-button-ghost"
+                  onClick={() => setDiagramOpen((value) => !value)}
+                  aria-expanded={diagramOpen}
+                >
+                  {diagramOpen ? "Hide model diagram" : "Show model diagram"}
+                </button>
+                <button
+                  type="button"
+                  className="ct-button ct-button-ghost"
+                  onClick={() => setFocused((value) => !value)}
+                >
+                  {focused ? "Show controls" : "Focus view"}
+                </button>
+              </div>
             </div>
-            {graph ? (
-              <ResidualGraph
-                graph={graph}
-                selectedKey={inspectReady && inspectResult?.node ? inspectResult.node.key : graphNode?.key ?? defaultNodeKey}
-                enabled={hasAnalysis}
-                onSelect={handleSelectNode}
-              />
+            {diagramOpen ? (
+              graph ? (
+                <ResidualGraph
+                  graph={graph}
+                  selectedKey={selectedNodeKey}
+                  enabled={hasAnalysis}
+                  onSelect={handleSelectNode}
+                />
+              ) : (
+                <p className="ct-muted">Loading the model graph…</p>
+              )
             ) : (
-              <p className="ct-muted">Loading the model graph…</p>
+              <p className="ct-muted" data-testid="diagram-collapsed-note">
+                The diagram is collapsed so the map stays on screen. Expand it
+                any time to click a node on the wiring itself.
+              </p>
             )}
-            <p className="ct-muted ct-graph-note">
-              Click any chip to see its captured tensor. Boxes above and below
-              the line read from the residual stream and write back at the
-              “add” junctions; “LN” marks the layer norms on the line.
-            </p>
           </section>
 
           <section className="ct-panel ct-node-panel">
@@ -427,6 +449,16 @@ export function App() {
               </div>
             </div>
 
+            {hasAnalysis ? (
+              <div className="ct-node-strip-wrap">
+                <NodeStrip
+                  items={traceItems}
+                  selectedKey={selectedNodeKey}
+                  onSelect={handleSelectNode}
+                />
+              </div>
+            ) : null}
+
             {inspectReady && inspectResult?.node ? (
               <div data-testid="inspect-text">
                 <p className="ct-explanation">{inspectResult.node.explanation}</p>
@@ -444,26 +476,6 @@ export function App() {
             )}
 
             <div className="ct-control-row">
-              <label className="ct-select-wrap">
-                <span className="ct-field-label">Node in the trace</span>
-                <select
-                  className="ct-select"
-                  value={effectiveKey}
-                  onChange={(event) => handleSelectNode(event.target.value)}
-                  disabled={!hasAnalysis}
-                  data-testid="node-select"
-                >
-                  {(graph?.trace ?? []).map((key) => {
-                    const node = nodeByKey.get(key);
-                    if (!node) return null;
-                    return (
-                      <option key={key} value={key}>
-                        {node.label}
-                      </option>
-                    );
-                  })}
-                </select>
-              </label>
               <label className="ct-select-wrap">
                 <span className="ct-field-label">Token position</span>
                 <select
@@ -483,15 +495,6 @@ export function App() {
                     </option>
                   ))}
                 </select>
-              </label>
-              <label className="ct-checkbox">
-                <input
-                  type="checkbox"
-                  checked={clipped}
-                  onChange={handleToggleClip}
-                  disabled={!hasAnalysis}
-                />
-                Clip extremes
               </label>
               {inspectBusy && <span className="ct-busy">Rendering…</span>}
             </div>

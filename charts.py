@@ -5,10 +5,6 @@ import numpy as np
 import plotly.graph_objects as go
 
 
-CLIP_LOW_PERCENTILE = 1.0
-CLIP_HIGH_PERCENTILE = 99.0
-
-
 def _as_matrix(values: np.ndarray) -> np.ndarray:
     matrix = np.asarray(values, dtype=float)
     if matrix.ndim != 2:
@@ -18,31 +14,11 @@ def _as_matrix(values: np.ndarray) -> np.ndarray:
     return matrix
 
 
-def display_bounds(values: np.ndarray, clipped: bool = False) -> Tuple[float, float]:
-    """Return symmetric color bounds without modifying the source values."""
-    return display_bounds_union([values], clipped)
-
-
-def display_bounds_union(
-    matrices: Sequence[np.ndarray],
-    clipped: bool = False,
-) -> Tuple[float, float]:
-    """Return symmetric bounds over the flattened union of several tensors.
-    Used to keep one color scale across the nodes of a family so magnitudes
-    can be compared while stepping along the residual stream."""
-    flattened = np.concatenate(
-        [np.asarray(matrix, dtype=float).reshape(-1) for matrix in matrices]
-    )
-    if flattened.size == 0:
-        raise ValueError("values must not be empty")
-    if clipped:
-        low, high = np.percentile(
-            flattened,
-            [CLIP_LOW_PERCENTILE, CLIP_HIGH_PERCENTILE],
-        )
-        bound = max(abs(float(low)), abs(float(high)))
-    else:
-        bound = float(np.max(np.abs(flattened)))
+def display_bounds(values: np.ndarray) -> Tuple[float, float]:
+    """Return the symmetric, zero-centered color bounds of one tensor's own
+    data, so each node is normalized by itself."""
+    matrix = _as_matrix(values)
+    bound = float(np.max(np.abs(matrix)))
     if bound == 0.0:
         bound = 1.0
     return -bound, bound
@@ -82,28 +58,36 @@ def render_token_map_row(
     """One heatmap row of per-token square maps.
 
     Every token's width-256 vector is drawn as its own 16x16 tile and the
-    tiles are concatenated left to right inside a single Heatmap trace. That
-    keeps rendering on one axis pair, so the figure draws reliably."""
+    tiles are laid out left to right inside a single Heatmap trace, separated
+    by one empty (transparent) column so adjacent tokens stay visually apart.
+    One axis pair keeps rendering reliable."""
     matrix = _as_matrix(values)
     labels = _labels(token_labels, matrix.shape[0])
     token_count, width = matrix.shape
     tile_rows, tile_cols = grid_shape(width)
 
-    columns = tile_cols * token_count
-    z = np.empty((tile_rows, columns), dtype=float)
-    dims = np.empty((tile_rows, columns), dtype=int)
-    token_ids = np.empty((tile_rows, columns), dtype=int)
-    for token_index in range(token_count):
-        start = token_index * tile_cols
-        end = start + tile_cols
-        z[:, start:end] = matrix[token_index].reshape(tile_rows, tile_cols)
-        tile_dims = np.arange(tile_rows * tile_cols).reshape(
-            tile_rows, tile_cols
-        )
-        dims[:, start:end] = tile_dims
-        token_ids[:, start:end] = token_index
+    gap = 1 if token_count > 1 else 0
+    stride = tile_cols + gap
+    columns = stride * token_count - (gap if token_count else 0)
 
-    customdata = np.stack([token_ids, dims], axis=-1)
+    # Gap cells are left as None so the plot background shows through between
+    # tokens; None is strict-JSON safe (unlike NaN).
+    z = [[None] * columns for _ in range(tile_rows)]
+    dims = [[-1] * columns for _ in range(tile_rows)]
+    token_ids = [[-1] * columns for _ in range(tile_rows)]
+    for token_index in range(token_count):
+        start = token_index * stride
+        for row in range(tile_rows):
+            for col in range(tile_cols):
+                local_dim = row * tile_cols + col
+                z[row][start + col] = float(matrix[token_index, local_dim])
+                dims[row][start + col] = local_dim
+                token_ids[row][start + col] = token_index
+
+    customdata = np.stack(
+        [np.asarray(token_ids, dtype=int), np.asarray(dims, dtype=int)],
+        axis=-1,
+    )
     lower, upper = bounds
     figure = go.Figure(
         go.Heatmap(
@@ -122,20 +106,8 @@ def render_token_map_row(
         )
     )
 
-    for token_index in range(1, token_count):
-        figure.add_shape(
-            type="line",
-            x0=token_index * tile_cols - 0.5,
-            x1=token_index * tile_cols - 0.5,
-            y0=-0.5,
-            y1=tile_rows - 0.5,
-            xref="x",
-            yref="y",
-            line=dict(color="#e2e8f0", width=1),
-        )
-
     if 0 <= selected_position < token_count:
-        start = selected_position * tile_cols
+        start = selected_position * stride
         figure.add_shape(
             type="rect",
             x0=start - 0.5,
@@ -152,7 +124,7 @@ def render_token_map_row(
         title=title,
         xaxis=dict(
             tickvals=[
-                token_index * tile_cols + (tile_cols - 1) / 2
+                token_index * stride + (tile_cols - 1) / 2
                 for token_index in range(token_count)
             ],
             ticktext=[label for label in labels],
