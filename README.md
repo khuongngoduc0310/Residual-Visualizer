@@ -14,6 +14,7 @@ format used by both Google Colab training and the local inspection app.
 - protobuf 5.29.6
 - Gradio 6.26.0
 - Native Windows for CPU inference, or WSL2/Linux with an NVIDIA driver for GPU inference
+- Node.js 20+ with npm, used only to build the React frontend
 
 TensorFlow 2.20 does not provide native-Windows NVIDIA GPU support. Native
 Windows is the supported CPU path; use WSL2 for GPU inference.
@@ -65,26 +66,47 @@ python app.py
 
 ## Run The Local App
 
-Extract a Colab checkpoint before loading it. The app reads the checkpoint from
-the machine running Python; it does not upload the folder through the browser.
-For example, a checkpoint stored on the Windows drive is available in WSL2 at
-`/mnt/c/Projects/Circuit Tracer/exports/checkpoint-20260902`.
+The interface is a React application (in `frontend/`) served by the same
+process that runs the Python model engine. The engine — checkpoint loading,
+prompt analysis, and captured-tensor inspection — stays in Gradio behind the
+scenes and is reached by the frontend over local JSON endpoints. Build the
+frontend once, and again after any frontend change:
 
-Start the app from the environment containing the dependencies:
+```powershell
+cd frontend
+npm install
+npm run build
+cd ..
+```
+
+Then start the app from the environment containing the Python dependencies.
+`python app.py` serves the built React interface at the root URL and the model
+engine underneath it; it stays bound to localhost with public sharing disabled:
 
 ```powershell
 python app.py
 ```
 
 Open `http://127.0.0.1:7860` in a browser. Enter the extracted folder
-path in **Checkpoint folder (server path)** and press **Load Model**. The app
-validates all three files before showing the model details, reports CUDA GPU or
-CPU based on TensorFlow's actual device visibility, and keeps the Gradio server
-bound to localhost with public sharing disabled.
+path in **Server path** and press **Load Model**. The app validates all three
+files before showing the model details and reports CUDA GPU or CPU based on
+TensorFlow's actual device visibility.
+
+For frontend development, run the engine and the Vite dev server together:
+
+```powershell
+python app.py
+cd frontend
+npm run dev
+```
+
+Open `http://127.0.0.1:5173`; Vite proxies the model endpoints to the engine on
+`127.0.0.1:7860`. The dev server hot-reloads frontend changes without touching
+Python or the model.
 
 For a quick UI check, use a desktop browser width of at least 1280px. Verify
 that the control rail, model path, activation field, two supporting charts, and
-output tabs are visible as a coherent workspace. A magnitude-bar click should
+output tables are visible as a coherent workspace. A magnitude-bar click should
 still update the token selector and the other two charts.
 
 Loading a new checkpoint first releases the current model and clears the old
@@ -294,6 +316,10 @@ runtime contract changes; older TensorFlow 2.10 checkpoints are rejected.
   app revision. Older formats are rejected intentionally.
 - **Prompt too long:** shorten the processed prompt to the maximum shown in the
   error. Prompts are rejected rather than silently truncated.
+- **Frontend not built:** `python app.py` prints a notice when
+  `frontend/dist` is missing. Build it once with `npm run build` inside
+  `frontend/`, then start the app again. For iterative UI work, use `npm run
+  dev` against a running `python app.py`.
 - **TensorFlow startup warnings:** oneDNN, CPU feature, and Keras deprecation
   messages are informational unless they are followed by an actual exception.
 

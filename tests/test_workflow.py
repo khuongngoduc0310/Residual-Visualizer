@@ -1,5 +1,4 @@
 import numpy as np
-import plotly.graph_objects as go
 import tensorflow as tf
 
 import app
@@ -12,11 +11,8 @@ from model import ModelConfig, build_model
 VOCABULARY = ["", "[UNK]", "hello", ",", "world", "!"]
 
 
-def test_cpu_checkpoint_to_all_internal_charts(tmp_path, monkeypatch):
+def test_cpu_checkpoint_to_all_internal_charts(tmp_path):
     """Exercise the complete local path using an explicitly CPU-bound model."""
-    monkeypatch.setattr(app, "detect_compute_device", lambda: app.ComputeDevice(
-        label="CPU", tf_device="/CPU:0", is_gpu=False
-    ))
     config = ModelConfig(
         vocab_size=len(VOCABULARY),
         max_len=6,
@@ -41,7 +37,8 @@ def test_cpu_checkpoint_to_all_internal_charts(tmp_path, monkeypatch):
     assert loaded.success
     assert not manager.loaded_state.device.is_gpu
 
-    outputs = app.analyze_and_inspect_callback("Hello, world!", manager)
+    analyzed = app.analyze_prompt_payload(manager, "Hello, world!")
+    assert analyzed["ok"]
     analysis = manager.inspection_session.analysis
     assert analysis.token_count == 4
     assert len(analysis.next_tokens) == 5
@@ -51,17 +48,25 @@ def test_cpu_checkpoint_to_all_internal_charts(tmp_path, monkeypatch):
     for location_key in LOCATION_KEYS:
         values = analysis.capture.locations[location_key]
         assert values.shape[0] == analysis.token_count
-        magnitude = app.render_token_magnitudes(values, token_labels, 3)
-        heatmap = app.render_activation_heatmap(values, token_labels, 3, False)
-        distribution = app.render_token_distribution(values[3], 3, token_labels[3])
-        np.testing.assert_allclose(magnitude.data[0].y, token_magnitudes(values))
-        np.testing.assert_allclose(heatmap.data[0].z, values)
+        payload = app.inspect_payload(manager, location_key, 3, False)
+        assert payload["state"] == "ready"
+        assert payload["shape"] == {
+            "seq_len": values.shape[0],
+            "width": values.shape[1],
+        }
+        assert payload["selected_position"] == 3
+        magnitude = payload["magnitude"]
+        heatmap = payload["heatmap_figure"]
+        distribution = payload["distribution"]
+        for figure in (magnitude, heatmap, distribution):
+            assert "data" in figure
+            assert "layout" in figure
         np.testing.assert_allclose(
-            distribution.data[0].x,
-            values[3],
+            magnitude["data"][0]["y"], token_magnitudes(values)
         )
-        assert all(isinstance(figure, go.Figure) for figure in (magnitude, heatmap, distribution))
+        np.testing.assert_allclose(heatmap["data"][0]["z"], values)
+        np.testing.assert_allclose(distribution["data"][0]["x"], values[3])
 
-    assert outputs[5]["value"] == "output_norm"
-    assert outputs[6]["value"] == "3"
+    default_inspect = app.inspect_payload(manager)
+    assert default_inspect["selected_position"] == 3
     assert checkpoint.config == config

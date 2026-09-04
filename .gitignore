@@ -5,3 +5,6 @@ __pycache__/
 checkpoints/
 training-artifacts/
 exports/
+node_modules/
+frontend/dist/
+*.tsbuildinfo
