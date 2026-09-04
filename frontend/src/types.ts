@@ -1,22 +1,63 @@
-export interface Stage {
-  key: string;
-  name: string;
-  category: string;
-  detail: string | null;
-}
+export type NodeKind =
+  | "component"
+  | "stream"
+  | "update"
+  | "ln"
+  | "hidden"
+  | "pattern"
+  | "readout";
 
-export interface LocationOption {
+export type NodeFamily =
+  | "components"
+  | "stream_raw"
+  | "updates"
+  | "stream_norm"
+  | "hidden"
+  | "pattern"
+  | "readout";
+
+export interface GraphNode {
   key: string;
   label: string;
-  category: string;
+  kind: NodeKind;
+  family: NodeFamily;
   explanation: string;
   normalized: boolean;
+  feature_axis: boolean;
+  trace_index: number;
+  trace_count: number;
+  prev_key: string | null;
+  next_key: string | null;
+}
+
+export interface GraphBranch {
+  key: string;
+  label: string;
+  reads: string;
+  adds_before: string;
+  nodes: string[];
+}
+
+export interface StreamGraph {
+  nodes: GraphNode[];
+  spine: string[];
+  spine_links: string[];
+  branches: GraphBranch[];
+  components: string[];
+  trace: string[];
+  default_node: string;
+}
+
+export interface LocationLite {
+  key: string;
+  label: string;
+  kind: NodeKind;
+  family: NodeFamily;
 }
 
 export interface OptionsPayload {
-  locations: LocationOption[];
-  default_location: string;
-  default_stages: Stage[];
+  graph: StreamGraph;
+  locations: LocationLite[];
 }
 
 export interface ModelMeta {
@@ -37,7 +78,6 @@ export interface LoadPayload {
   loaded: boolean;
   meta: ModelMeta;
   device_label: string | null;
-  stages: Stage[];
   summary: string | null;
 }
 
@@ -64,14 +104,6 @@ export interface AnalyzePayload {
   next_tokens: NextTokenRow[];
 }
 
-export interface LocationInfo {
-  key: string;
-  label: string;
-  category: string;
-  explanation: string;
-  normalized: boolean;
-}
-
 export interface Shape {
   seq_len: number;
   width: number;
@@ -83,18 +115,12 @@ export interface CaptureStats {
   max: number;
 }
 
-export interface SelectedStats {
-  norm: number;
-  mean: number;
-  standard_deviation: number;
-  minimum: number;
-  maximum: number;
-}
-
-export interface HeatmapRange {
+export interface ScaleInfo {
   lower: number;
   upper: number;
   clipped: boolean;
+  family: NodeFamily;
+  source: "family" | "matrix";
 }
 
 export interface FigureSpec {
@@ -107,18 +133,28 @@ export interface TokenChoice {
   text: string;
 }
 
+export type FigureKind =
+  | "activation"
+  | "hidden"
+  | "pattern"
+  | "readout_topk"
+  | null;
+
 export interface InspectPayload {
   ok: boolean;
   state: "awaiting" | "ready" | "error";
   message: string;
-  location: LocationInfo | null;
+  node: GraphNode | null;
   selected_position: number | null;
   token_choices: TokenChoice[];
   shape: Shape | null;
   capture: CaptureStats | null;
-  selected_stats: SelectedStats | null;
-  heatmap: HeatmapRange | null;
-  magnitude: FigureSpec | null;
-  heatmap_figure: FigureSpec | null;
-  distribution: FigureSpec | null;
+  scale: ScaleInfo | null;
+  tile: { rows: number; cols: number } | null;
+  figure_kind: FigureKind;
+  map_figure: FigureSpec | null;
+  pattern_figure: FigureSpec | null;
+  readout_figure: FigureSpec | null;
+  entropy_figure: FigureSpec | null;
+  readout_rows: NextTokenRow[];
 }

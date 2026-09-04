@@ -6,6 +6,12 @@ import tensorflow as tf
 
 import app
 from checkpoint import CONFIG_FILENAME, CheckpointError, save_checkpoint
+from inspection import (
+    DEFAULT_NODE_KEY,
+    EMBEDDING_COMPONENTS,
+    STREAM_NODES,
+    TRACE_ORDER,
+)
 from model import ModelConfig, build_model
 
 
@@ -52,6 +58,10 @@ def analyze_fixture(path, prompt="hello , world"):
     return manager, payload
 
 
+def node_keys():
+    return [node.key for node in STREAM_NODES]
+
+
 # --------------------------------------------------------------------------- #
 # Checkpoint loading payloads
 
@@ -74,19 +84,6 @@ def test_load_payload_loads_checkpoint_and_describes_the_model(tmp_path):
     assert payload["meta"]["key_dim"] == config.key_dim
     assert payload["meta"]["feed_forward_dim"] == config.feed_forward_dim
     assert payload["device_label"] == "CPU"
-    keys = [stage["key"] for stage in payload["stages"]]
-    assert keys == [
-        "embedding",
-        "attention_update",
-        "attention_residual",
-        "attention_norm",
-        "ffn_hidden",
-        "ffn_update",
-        "ffn_residual",
-        "output_norm",
-        "vocabulary_projection",
-    ]
-    assert payload["stages"][0]["detail"] == "sequence <= 6, width 8"
     assert "one_block_post_norm_causal_lm" in payload["summary"]
     assert manager.loaded_state is not None
     assert manager.loaded_state.checkpoint.config == config
@@ -105,7 +102,6 @@ def test_load_payload_reports_missing_folder_and_has_no_model(tmp_path):
     assert payload["device_label"] is None
     assert payload["summary"] is None
     assert manager.loaded_state is None
-    assert payload["stages"][0]["key"] == "embedding"
 
 
 def test_load_payload_rejects_an_empty_folder_path():
@@ -307,33 +303,39 @@ def test_inspect_before_analysis_reports_awaiting_state(tmp_path):
     manager = app.ModelManager(device_detector=lambda: fake_device())
     manager.load(str(tmp_path))
 
-    payload = app.inspect_payload(manager)
+    payload = app.inspect_node_payload(manager)
 
     assert payload["ok"]
     assert payload["state"] == "awaiting"
     assert payload["message"] == app.INSPECT_AWAITING
-    assert payload["location"] is None
+    assert payload["node"] is None
     assert payload["selected_position"] is None
     assert payload["token_choices"] == []
     assert payload["shape"] is None
     assert payload["capture"] is None
-    assert payload["selected_stats"] is None
-    assert payload["heatmap"] is None
-    assert payload["magnitude"] is None
-    assert payload["distribution"] is None
+    assert payload["scale"] is None
+    assert payload["tile"] is None
+    assert payload["map_figure"] is None
+    assert payload["pattern_figure"] is None
+    assert payload["readout_figure"] is None
+    assert payload["entropy_figure"] is None
+    assert payload["readout_rows"] == []
 
 
 def test_inspect_returns_capture_defaults(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    payload = app.inspect_payload(manager)
+    payload = app.inspect_node_payload(manager)
 
     assert payload["ok"]
     assert payload["state"] == "ready"
-    assert payload["location"]["key"] == "output_norm"
-    assert payload["location"]["label"] == "Final block output"
-    assert payload["location"]["category"] == "Residual Stream"
-    assert "layer-normalized block output" in payload["location"]["explanation"]
+    assert payload["node"]["key"] == DEFAULT_NODE_KEY
+    assert payload["node"]["label"] == "Layer norm \u00b7 block output"
+    assert payload["node"]["family"] == "stream_norm"
+    assert payload["node"]["normalized"] is True
+    assert "layer-normalized block output" in payload["node"]["explanation"]
+    assert payload["node"]["prev_key"] == "ffn_residual"
+    assert payload["node"]["next_key"] == "readout"
     assert payload["selected_position"] == 2
     assert payload["token_choices"] == [
         {"position": 0, "text": "hello"},
@@ -343,22 +345,13 @@ def test_inspect_returns_capture_defaults(tmp_path):
     assert payload["shape"] == {"seq_len": 3, "width": 8}
     assert set(payload["capture"]) == {"min", "mean", "max"}
     assert payload["capture"]["max"] >= payload["capture"]["min"]
-    assert set(payload["selected_stats"]) == {
-        "norm",
-        "mean",
-        "standard_deviation",
-        "minimum",
-        "maximum",
-    }
-    assert payload["heatmap"]["clipped"] is False
-    assert payload["heatmap"]["lower"] <= payload["heatmap"]["upper"]
-    for figure in (
-        payload["magnitude"],
-        payload["heatmap_figure"],
-        payload["distribution"],
-    ):
-        assert "data" in figure
-        assert "layout" in figure
+    assert payload["scale"]["clipped"] is False
+    assert payload["scale"]["lower"] <= payload["scale"]["upper"]
+    assert payload["scale"]["source"] == "family"
+    assert payload["tile"] == {"rows": 2, "cols": 4}
+    assert "data" in payload["map_figure"]
+    assert "layout" in payload["map_figure"]
+    assert len(payload["map_figure"]["data"]) == 1
 
 
 def test_inspect_uses_stored_data_without_running_the_model(tmp_path):
@@ -371,46 +364,122 @@ def test_inspect_uses_stored_data_without_running_the_model(tmp_path):
     checkpoint = manager.loaded_state.checkpoint
     object.__setattr__(checkpoint, "model", ExplodingModel())
 
-    payload = app.inspect_payload(manager, "ffn_hidden", 1, True)
+    payload = app.inspect_node_payload(manager, "ffn_hidden", 1, True)
 
     assert payload["state"] == "ready"
-    assert payload["location"]["key"] == "ffn_hidden"
-    assert payload["location"]["category"] == "FFN"
-    assert "feed-forward" in payload["location"]["explanation"]
+    assert payload["node"]["key"] == "ffn_hidden"
+    assert payload["node"]["family"] == "hidden"
+    assert payload["figure_kind"] == "hidden"
     assert payload["selected_position"] == 1
-    assert payload["heatmap"]["clipped"] is True
-    assert payload["heatmap"]["lower"] == -payload["heatmap"]["upper"]
-    assert payload["magnitude"]["data"]
-    assert payload["heatmap_figure"]["data"]
+    assert payload["scale"]["lower"] == 0.0
+    assert payload["scale"]["clipped"] is True
+    assert payload["map_figure"]["data"]
+    assert payload["tile"] == {"rows": 2, "cols": 4}
 
 
-def test_inspect_can_switch_back_to_the_default_location(tmp_path):
+def test_inspect_can_switch_back_to_the_default_node(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    payload = app.inspect_payload(manager, "output_norm", 0, False)
+    payload = app.inspect_node_payload(manager, "output_norm", 0, False)
 
-    assert payload["location"]["key"] == "output_norm"
-    assert payload["location"]["label"] == "Final block output"
+    assert payload["node"]["key"] == "output_norm"
+    assert payload["node"]["label"] == "Layer norm \u00b7 block output"
     assert payload["selected_position"] == 0
 
 
 def test_inspect_clamps_token_position_to_the_capture(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    payload = app.inspect_payload(manager, "output_norm", 999, False)
-    high = app.inspect_payload(manager, "output_norm", -3, False)
+    payload = app.inspect_node_payload(manager, "output_norm", 999, False)
+    high = app.inspect_node_payload(manager, "output_norm", -3, False)
 
     assert payload["selected_position"] == 2
     assert high["selected_position"] == 0
 
 
-def test_inspect_reports_an_unknown_location(tmp_path):
+def test_inspect_reports_an_unknown_node(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    payload = app.inspect_payload(manager, "not_a_location", 0, False)
+    payload = app.inspect_node_payload(manager, "not_a_node", 0, False)
 
     assert payload["state"] == "error"
-    assert "Unknown internal location" in payload["message"]
+    assert "Unknown stream node" in payload["message"]
+
+
+def test_family_scale_is_shared_across_stream_nodes(tmp_path):
+    manager, _ = analyze_fixture(tmp_path)
+
+    embedding = app.inspect_node_payload(manager, "embedding", None, True)
+    after_attention = app.inspect_node_payload(
+        manager, "attention_residual", None, True
+    )
+
+    assert embedding["scale"]["source"] == "family"
+    assert after_attention["scale"]["source"] == "family"
+    assert embedding["scale"]["family"] == after_attention["scale"]["family"]
+    assert embedding["scale"]["family"] == "stream_raw"
+    assert embedding["scale"]["lower"] == after_attention["scale"]["lower"]
+    assert embedding["scale"]["upper"] == after_attention["scale"]["upper"]
+
+
+def test_attention_pattern_node_returns_pattern_view(tmp_path):
+    manager, _ = analyze_fixture(tmp_path)
+
+    payload = app.inspect_node_payload(manager, "attention_pattern", 1, False)
+
+    assert payload["state"] == "ready"
+    assert payload["node"]["kind"] == "pattern"
+    assert payload["figure_kind"] == "pattern"
+    assert payload["pattern_figure"]["data"]
+    assert payload["map_figure"] is None
+    assert payload["tile"] is None
+    assert payload["shape"] == {"seq_len": 3, "width": 3}
+
+
+def test_embedding_components_node_views(tmp_path):
+    manager, _ = analyze_fixture(tmp_path)
+
+    for key in EMBEDDING_COMPONENTS:
+        payload = app.inspect_node_payload(manager, key, 0, False)
+        assert payload["state"] == "ready"
+        assert payload["node"]["kind"] == "component"
+        assert payload["node"]["family"] == "components"
+        assert payload["shape"] == {"seq_len": 3, "width": 8}
+        assert payload["tile"] == {"rows": 2, "cols": 4}
+        assert payload["map_figure"]["data"]
+        assert payload["map_figure"]["data"][0]["zmin"] == \
+            payload["scale"]["lower"]
+
+
+def test_readout_node_returns_topk_rows_and_entropy(tmp_path):
+    manager, payload = analyze_fixture(tmp_path)
+    analysis = manager.inspection_session.analysis
+
+    inspected = app.inspect_node_payload(manager, "readout", 2, False)
+
+    assert inspected["state"] == "ready"
+    assert inspected["node"]["kind"] == "readout"
+    assert inspected["figure_kind"] == "readout_topk"
+    assert inspected["readout_figure"]["data"]
+    assert inspected["entropy_figure"]["data"]
+    assert inspected["shape"]["width"] == len(VOCABULARY)
+    assert {row["rank"] for row in inspected["readout_rows"]} == set(range(1, 7))
+    probabilities = [row["probability"] for row in inspected["readout_rows"]]
+    assert probabilities == sorted(probabilities, reverse=True)
+    assert probabilities[0] == max(
+        analysis.capture.probabilities[2].tolist()
+    )
+    assert inspected["capture"]["max"] >= inspected["capture"]["min"]
+
+
+def test_every_node_renders_a_view_after_analysis(tmp_path):
+    manager, _ = analyze_fixture(tmp_path)
+
+    for node in STREAM_NODES:
+        payload = app.inspect_node_payload(manager, node.key, 0, False)
+        assert payload["state"] == "ready", node.key
+        assert payload["node"]["trace_index"] == node_keys().index(node.key)
+        assert payload["selected_position"] == 0
 
 
 def test_load_payloads_are_json_serializable(tmp_path):
@@ -418,10 +487,12 @@ def test_load_payloads_are_json_serializable(tmp_path):
     manager = app.ModelManager(device_detector=lambda: fake_device())
     loaded = app.load_model_payload(manager, str(tmp_path))
     app.analyze_prompt_payload(manager, "hello , world")
-    inspected = app.inspect_payload(manager, "ffn_update", 1, True)
+    activation = app.inspect_node_payload(manager, "ffn_update", 1, True)
+    pattern = app.inspect_node_payload(manager, "attention_pattern", 1, False)
+    readout = app.inspect_node_payload(manager, "readout", 2, False)
 
-    json.loads(json.dumps(loaded))
-    json.loads(json.dumps(inspected))
+    for payload in (loaded, activation, pattern, readout):
+        json.loads(json.dumps(payload))
 
 
 def test_loading_a_new_checkpoint_clears_the_stored_capture(tmp_path):
@@ -445,27 +516,37 @@ def test_loading_a_new_checkpoint_clears_the_stored_capture(tmp_path):
 # Static options and app construction
 
 
-def test_options_payload_lists_every_location_and_defaults():
+def test_options_payload_describes_the_stream_graph():
     payload = app.options_payload()
 
-    assert payload["default_location"] == "output_norm"
-    keys = [location["key"] for location in payload["locations"]]
-    assert keys == [
+    graph = payload["graph"]
+    assert graph["default_node"] == DEFAULT_NODE_KEY
+    keys = [node["key"] for node in graph["nodes"]]
+    assert keys == list(TRACE_ORDER)
+    assert graph["spine"] == [
         "embedding",
-        "attention_update",
         "attention_residual",
         "attention_norm",
-        "ffn_hidden",
-        "ffn_update",
         "ffn_residual",
         "output_norm",
     ]
+    assert len(graph["spine_links"]) == len(graph["spine"])
+    assert graph["trace"] == list(TRACE_ORDER)
+    assert [branch["key"] for branch in graph["branches"]] == [
+        "attention",
+        "ffn",
+    ]
+    attention = graph["branches"][0]
+    assert attention["reads"] == "embedding"
+    assert attention["adds_before"] == "attention_residual"
+    assert attention["nodes"] == ["attention_pattern", "attention_update"]
+    assert graph["components"] == list(EMBEDDING_COMPONENTS)
     output_norm = next(
-        item for item in payload["locations"] if item["key"] == "output_norm"
+        node for node in graph["nodes"] if node["key"] == "output_norm"
     )
-    assert output_norm["label"] == "Final block output"
     assert output_norm["normalized"] is True
-    assert payload["default_stages"][0]["detail"] is None
+    assert output_norm["next_key"] == "readout"
+    assert payload["locations"][0]["key"] == "token_embeddings"
 
 
 def test_create_app_builds_endpoints_without_launching():
@@ -476,6 +557,6 @@ def test_create_app_builds_endpoints_without_launching():
     assert {
         "load_checkpoint",
         "analyze_prompt",
-        "inspect_location",
+        "inspect_node",
         "options",
     } <= api_names

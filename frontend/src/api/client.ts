@@ -18,10 +18,10 @@ export function analyzePrompt(prompt: string): Promise<AnalyzePayload> {
   return callApi("analyze_prompt", [prompt]);
 }
 
-export function inspectLocation(
-  locationKey: string | null,
+export function inspectNode(
+  nodeKey: string | null,
   tokenPosition: number | null,
   clipped: boolean,
 ): Promise<InspectPayload> {
-  return callApi("inspect_location", [locationKey, tokenPosition, clipped]);
+  return callApi("inspect_node", [nodeKey, tokenPosition, clipped]);
 }

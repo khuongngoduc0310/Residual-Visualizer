@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as engine from "./api/client";
 import { CtApiError } from "./api/gradio";
-import { ModelDiagram } from "./components/ModelDiagram";
-import { Visuals } from "./components/Visuals";
+import { NodeView } from "./components/NodeView";
+import { ResidualGraph } from "./components/ResidualGraph";
 import type {
   AnalyzePayload,
+  GraphNode,
   InspectPayload,
   LoadPayload,
   OptionsPayload,
 } from "./types";
 import "./App.css";
 
-const FALLBACK_LOCATION = "output_norm";
 const AWAITING_COPY = "Analyze a prompt to capture every internal location.";
 
 function errorMessage(error: unknown): string {
@@ -40,14 +40,15 @@ export function App() {
   const [inspectResult, setInspectResult] = useState<InspectPayload | null>(null);
   const [inspectBusy, setInspectBusy] = useState(false);
   const [inspectError, setInspectError] = useState<string>("");
-  const [locationKey, setLocationKey] = useState<string | null>(null);
+  const [nodeKey, setNodeKey] = useState<string | null>(null);
   const [tokenPosition, setTokenPosition] = useState<number | null>(null);
   const [clipped, setClipped] = useState(false);
-  const [visualExpanded, setVisualExpanded] = useState(false);
+  const [focused, setFocused] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    getOptionsSafe()
+    engine
+      .getOptions()
       .then((loaded) => {
         if (!cancelled) setOptions(loaded);
       })
@@ -59,24 +60,21 @@ export function App() {
     };
   }, []);
 
-  async function getOptionsSafe(): Promise<OptionsPayload> {
-    return engine.getOptions();
-  }
-
   useEffect(() => {
-    document.body.classList.toggle("ct-visual-expanded", visualExpanded);
-    return () => document.body.classList.remove("ct-visual-expanded");
-  }, [visualExpanded]);
+    document.body.classList.toggle("ct-focused", focused);
+    return () => document.body.classList.remove("ct-focused");
+  }, [focused]);
 
-  const locations = options?.locations ?? [];
-  const defaultLocation = options?.default_location ?? FALLBACK_LOCATION;
+  const graph = options?.graph ?? null;
+  const nodeByKey = useMemo(() => {
+    const map = new Map<string, GraphNode>();
+    for (const node of graph?.nodes ?? []) map.set(node.key, node);
+    return map;
+  }, [graph]);
 
-  const selectedLocationKey = locationKey ?? defaultLocation;
-
-  const selectableStages = useMemo(() => {
-    if (!analysis?.ok) return new Set<string>();
-    return new Set(locations.map((item) => item.key));
-  }, [analysis?.ok, locations]);
+  const defaultNodeKey = graph?.default_node ?? "output_norm";
+  const effectiveKey = nodeKey ?? defaultNodeKey;
+  const graphNode = nodeByKey.get(effectiveKey) ?? null;
 
   const runInspect = useCallback(
     async (
@@ -87,10 +85,10 @@ export function App() {
       setInspectBusy(true);
       setInspectError("");
       try {
-        const result = await engine.inspectLocation(key, position, clip);
+        const result = await engine.inspectNode(key, position, clip);
         setInspectResult(result);
-        if (result.state === "ready" && result.location) {
-          setLocationKey(result.location.key);
+        if (result.state === "ready" && result.node) {
+          setNodeKey(result.node.key);
           setTokenPosition(result.selected_position);
         }
         return result;
@@ -114,7 +112,7 @@ export function App() {
       setAnalysis(null);
       setInspectResult(null);
       setInspectError("");
-      setLocationKey(null);
+      setNodeKey(null);
       setTokenPosition(null);
       if (!result.ok) {
         setLoadError(result.status);
@@ -135,13 +133,12 @@ export function App() {
       const result = await engine.analyzePrompt(prompt);
       setAnalysis(result);
       if (result.ok) {
-        const key = defaultLocation;
-        setLocationKey(key);
+        setNodeKey(null);
         setTokenPosition(null);
-        await runInspect(key, null, clipped);
+        await runInspect(null, null, clipped);
       } else {
         setInspectResult(null);
-        setLocationKey(null);
+        setNodeKey(null);
         setTokenPosition(null);
         setAnalyzeError(result.status);
       }
@@ -154,22 +151,26 @@ export function App() {
     }
   }
 
-  function handleSelectLocation(key: string): void {
+  function handleSelectNode(key: string): void {
+    if (key === (nodeKey ?? defaultNodeKey)) return;
     void runInspect(key, tokenPosition, clipped).catch(() => undefined);
   }
 
   function handleSelectToken(position: number): void {
-    void runInspect(selectedLocationKey, position, clipped).catch(
-      () => undefined,
-    );
+    if (position === tokenPosition) return;
+    void runInspect(effectiveKey, position, clipped).catch(() => undefined);
+  }
+
+  function handleStep(delta: number): void {
+    if (!graphNode) return;
+    const target = delta < 0 ? graphNode.prev_key : graphNode.next_key;
+    if (target) void runInspect(target, tokenPosition, clipped);
   }
 
   function handleToggleClip(): void {
     const next = !clipped;
     setClipped(next);
-    void runInspect(selectedLocationKey, tokenPosition, next).catch(
-      () => undefined,
-    );
+    void runInspect(effectiveKey, tokenPosition, next).catch(() => undefined);
   }
 
   const inspectReady = inspectResult?.state === "ready";
@@ -180,15 +181,16 @@ export function App() {
       : "");
 
   const modelSummary = loadResult?.loaded ? loadResult.summary : null;
+  const hasAnalysis = Boolean(analysis?.ok);
 
   return (
-    <div className={visualExpanded ? "ct-page ct-page-expanded" : "ct-page"}>
+    <div className={focused ? "ct-page ct-page-focused" : "ct-page"}>
       <header className="ct-header">
         <div className="ct-heading">
-          <p className="ct-kicker">RESIDUAL STREAM / INSPECTION</p>
+          <p className="ct-kicker">RESIDUAL STREAM / ONE-BLOCK TRANSFORMER</p>
           <h1 className="ct-title">Circuit Tracer</h1>
           <p className="ct-subtitle">
-            A visual workbench for tracing one-block language-model activations.
+            Watch the residual stream flow, and the writes that shape it.
           </p>
         </div>
         <p className="ct-header-note">
@@ -198,7 +200,7 @@ export function App() {
         </p>
       </header>
 
-      <div className="ct-console">
+      <div className="ct-explorer">
         <aside className="ct-rail">
           <section className="ct-panel">
             <h2 className="ct-section-label">01 / LOAD CHECKPOINT</h2>
@@ -240,21 +242,11 @@ export function App() {
               {loadResult?.loaded && loadResult.meta && (
                 <>
                   <div>
-                    <dt>Checkpoint</dt>
-                    <dd>{loadResult.meta.path}</dd>
-                  </div>
-                  <div>
-                    <dt>Architecture</dt>
-                    <dd>{loadResult.meta.architecture}</dd>
-                  </div>
-                  <div>
                     <dt>Vocabulary</dt>
-                    <dd>
-                      {formatCount(loadResult.meta.vocab_size)} tokens
-                    </dd>
+                    <dd>{formatCount(loadResult.meta.vocab_size)} tokens</dd>
                   </div>
                   <div>
-                    <dt>Maximum sequence</dt>
+                    <dt>Max sequence</dt>
                     <dd>{formatCount(loadResult.meta.max_len)} tokens</dd>
                   </div>
                   <div>
@@ -265,12 +257,16 @@ export function App() {
                     <dt>Attention</dt>
                     <dd>
                       {formatCount(loadResult.meta.num_heads)} heads x{" "}
-                      {formatCount(loadResult.meta.key_dim)} key width
+                      {formatCount(loadResult.meta.key_dim)}
                     </dd>
                   </div>
                   <div>
                     <dt>FFN width</dt>
                     <dd>{formatCount(loadResult.meta.feed_forward_dim)}</dd>
+                  </div>
+                  <div>
+                    <dt>Checkpoint</dt>
+                    <dd className="ct-mono-small">{loadResult.meta.path}</dd>
                   </div>
                 </>
               )}
@@ -296,7 +292,7 @@ export function App() {
             <textarea
               id="prompt"
               className="ct-text-input ct-textarea"
-              rows={5}
+              rows={4}
               placeholder="Enter a prompt to trace..."
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
@@ -321,50 +317,151 @@ export function App() {
                 "Load a model, then enter a prompt."}
             </p>
             {analysis?.ok && (
-              <p className="ct-meta" data-testid="analysis-count">
-                Processed tokens: {analysis.token_count} of {analysis.max_len}
-                {analysis.unknown_count ? (
-                  <span className="ct-warning">
-                    {" "}
-                    &middot; contains {analysis.unknown_count} unknown
-                    token(s), mapped to [UNK]
-                  </span>
-                ) : null}
-              </p>
+              <>
+                <p className="ct-meta" data-testid="analysis-count">
+                  Processed tokens: {analysis.token_count} of {analysis.max_len}
+                  {analysis.unknown_count ? (
+                    <span className="ct-warning">
+                      {" "}
+                      · contains {analysis.unknown_count} unknown token(s),
+                      mapped to [UNK]
+                    </span>
+                  ) : null}
+                </p>
+                <h3 className="ct-subheading">Tokens</h3>
+                <div className="ct-token-chips" data-testid="token-chips">
+                  {analysis.tokens.map((token) => (
+                    <button
+                      key={token.position}
+                      type="button"
+                      className={`ct-token-chip ${
+                        token.position === tokenPosition ? "ct-token-chip-selected" : ""
+                      }`}
+                      onClick={() => handleSelectToken(token.position)}
+                      title="Select this token position"
+                    >
+                      <span className="ct-token-pos">{token.position}</span>
+                      <span className="ct-token-text">{token.text}</span>
+                    </button>
+                  ))}
+                </div>
+                <h3 className="ct-subheading">Predicted next (last token)</h3>
+                <div className="ct-next-inline" data-testid="analysis-next">
+                  {analysis.next_tokens.slice(0, 5).map((next) => (
+                    <span key={next.rank} className="ct-next-chip">
+                      {next.rank}. {next.text} ({next.probability.toFixed(3)})
+                    </span>
+                  ))}
+                </div>
+              </>
             )}
           </section>
         </aside>
 
         <main className="ct-workspace">
           <section className="ct-panel">
-            <h2 className="ct-section-label">MODEL PATH</h2>
-            <h3 className="ct-panel-title">The one-block causal language model</h3>
-            <div className="ct-diagram-wrap">
-              <ModelDiagram
-                stages={loadResult?.loaded ? loadResult.stages : (options?.default_stages ?? [])}
-                selectedKey={inspectReady && inspectResult?.location ? inspectResult.location.key : null}
-                selectableKeys={selectableStages}
-                onSelect={handleSelectLocation}
-              />
+            <div className="ct-panel-head">
+              <div>
+                <h2 className="ct-section-label">THE MODEL</h2>
+                <h3 className="ct-panel-title">
+                  One residual line, two parallel writes
+                </h3>
+              </div>
+              <button
+                type="button"
+                className="ct-button ct-button-ghost"
+                onClick={() => setFocused((value) => !value)}
+              >
+                {focused ? "Show controls" : "Focus view"}
+              </button>
             </div>
+            {graph ? (
+              <ResidualGraph
+                graph={graph}
+                selectedKey={inspectReady && inspectResult?.node ? inspectResult.node.key : graphNode?.key ?? defaultNodeKey}
+                enabled={hasAnalysis}
+                onSelect={handleSelectNode}
+              />
+            ) : (
+              <p className="ct-muted">Loading the model graph…</p>
+            )}
+            <p className="ct-muted ct-graph-note">
+              Click any chip to see its captured tensor. Boxes above and below
+              the line read from the residual stream and write back at the
+              “add” junctions; “LN” marks the layer norms on the line.
+            </p>
           </section>
 
-          <section className="ct-panel">
-            <h2 className="ct-section-label">03 / INSPECT CAPTURED STATES</h2>
+          <section className="ct-panel ct-node-panel">
+            <div className="ct-node-head">
+              <div className="ct-node-title">
+                <h2 className="ct-section-label">CAPTURED STATE</h2>
+                {graphNode && (
+                  <h3 className="ct-panel-title" data-testid="node-label">
+                    {graphNode.label}
+                  </h3>
+                )}
+              </div>
+              <div className="ct-step-row">
+                <button
+                  type="button"
+                  className="ct-button ct-button-ghost"
+                  onClick={() => handleStep(-1)}
+                  disabled={!hasAnalysis || !graphNode?.prev_key}
+                  aria-label="Previous node in the stream"
+                >
+                  ◀ Previous
+                </button>
+                <span className="ct-trace-count">
+                  {graphNode ? `${graphNode.trace_index + 1} / ${graphNode.trace_count}` : ""}
+                </span>
+                <button
+                  type="button"
+                  className="ct-button ct-button-ghost"
+                  onClick={() => handleStep(1)}
+                  disabled={!hasAnalysis || !graphNode?.next_key}
+                  aria-label="Next node in the stream"
+                >
+                  Next ▶
+                </button>
+              </div>
+            </div>
+
+            {inspectReady && inspectResult?.node ? (
+              <div data-testid="inspect-text">
+                <p className="ct-explanation">{inspectResult.node.explanation}</p>
+                {inspectResult.node.normalized && (
+                  <p className="ct-muted">
+                    Layer normalization rescales every token, so magnitude
+                    comparisons across tokens are not meaningful here.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="ct-muted" data-testid="inspect-awaiting">
+                {inspectMessage || AWAITING_COPY}
+              </p>
+            )}
+
             <div className="ct-control-row">
               <label className="ct-select-wrap">
-                <span className="ct-field-label">Internal location</span>
+                <span className="ct-field-label">Node in the trace</span>
                 <select
                   className="ct-select"
-                  value={selectedLocationKey}
-                  onChange={(event) => handleSelectLocation(event.target.value)}
-                  disabled={!analysis?.ok}
+                  value={effectiveKey}
+                  onChange={(event) => handleSelectNode(event.target.value)}
+                  disabled={!hasAnalysis}
+                  data-testid="node-select"
                 >
-                  {locations.map((item) => (
-                    <option key={item.key} value={item.key}>
-                      {item.category} · {item.label}
-                    </option>
-                  ))}
+                  {(graph?.trace ?? []).map((key) => {
+                    const node = nodeByKey.get(key);
+                    if (!node) return null;
+                    return (
+                      <option key={key} value={key}>
+                        {node.label}
+                      </option>
+                    );
+                  })}
                 </select>
               </label>
               <label className="ct-select-wrap">
@@ -377,7 +474,8 @@ export function App() {
                       ? undefined
                       : handleSelectToken(Number(event.target.value))
                   }
-                  disabled={!analysis?.ok}
+                  disabled={!hasAnalysis}
+                  data-testid="token-select"
                 >
                   {inspectResult?.token_choices.map((token) => (
                     <option key={token.position} value={token.position}>
@@ -391,141 +489,45 @@ export function App() {
                   type="checkbox"
                   checked={clipped}
                   onChange={handleToggleClip}
-                  disabled={!analysis?.ok}
+                  disabled={!hasAnalysis}
                 />
                 Clip extremes
               </label>
               {inspectBusy && <span className="ct-busy">Rendering…</span>}
             </div>
-            <div className="ct-inspect-text" data-testid="inspect-text">
-              {inspectReady && inspectResult?.location ? (
-                <>
-                  <h3 className="ct-location-heading">
-                    {inspectResult.location.category} ·{" "}
-                    {inspectResult.location.label}
-                  </h3>
-                  <p>{inspectResult.location.explanation}</p>
-                  {inspectResult.location.normalized && (
-                    <p className="ct-muted">
-                      Layer normalization fixes each token&apos;s feature scale,
-                      so its token-magnitude chart may look nearly flat.
-                    </p>
-                  )}
-                </>
-              ) : (
-                <p className="ct-muted">{inspectMessage || AWAITING_COPY}</p>
-              )}
-            </div>
-            <div className="ct-two-up">
-              <div className="ct-stat-box" data-testid="capture-stats">
-                {inspectReady && inspectResult ? (
+
+            {inspectReady && inspectResult ? (
+              <div className="ct-stat-box ct-stat-box-single" data-testid="capture-stats">
+                {inspectResult.shape && (
                   <dl className="ct-meta ct-meta-grid">
                     <div>
                       <dt>Shape</dt>
                       <dd>
-                        {inspectResult.shape?.seq_len} ×{" "}
-                        {inspectResult.shape?.width}
+                        {inspectResult.shape.seq_len} ×{" "}
+                        {inspectResult.shape.width}
                       </dd>
                     </div>
-                    <div>
-                      <dt>Capture range</dt>
-                      <dd>
-                        min {inspectResult.capture?.min.toFixed(4)}, mean{" "}
-                        {inspectResult.capture?.mean.toFixed(4)}, max{" "}
-                        {inspectResult.capture?.max.toFixed(4)}
-                      </dd>
-                    </div>
+                    {inspectResult.capture && (
+                      <div>
+                        <dt>Capture range</dt>
+                        <dd>
+                          min {inspectResult.capture.min.toFixed(4)}, mean{" "}
+                          {inspectResult.capture.mean.toFixed(4)}, max{" "}
+                          {inspectResult.capture.max.toFixed(4)}
+                        </dd>
+                      </div>
+                    )}
                   </dl>
-                ) : null}
+                )}
               </div>
-              <div className="ct-stat-box" data-testid="token-stats">
-                {inspectReady && inspectResult?.selected_stats ? (
-                  <dl className="ct-meta ct-meta-grid">
-                    <div>
-                      <dt>Selected token</dt>
-                      <dd>
-                        norm {inspectResult.selected_stats.norm.toFixed(4)}, mean{" "}
-                        {inspectResult.selected_stats.mean.toFixed(4)}, std{" "}
-                        {inspectResult.selected_stats.standard_deviation.toFixed(4)}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Range</dt>
-                      <dd>
-                        min {inspectResult.selected_stats.minimum.toFixed(4)}, max{" "}
-                        {inspectResult.selected_stats.maximum.toFixed(4)}
-                      </dd>
-                    </div>
-                  </dl>
-                ) : null}
-              </div>
-            </div>
-          </section>
+            ) : null}
 
-          {visualExpanded ? (
-            <div className="ct-overlay" role="dialog" aria-label="Expanded visualizations">
-              <Visuals
+            {inspectReady && inspectResult ? (
+              <NodeView
                 inspect={inspectResult}
-                expanded
-                onToggleExpanded={() => setVisualExpanded(false)}
-                onSelectPosition={(position) => handleSelectToken(position)}
+                onSelectPosition={handleSelectToken}
               />
-            </div>
-          ) : (
-            <Visuals
-              inspect={inspectResult}
-              expanded={false}
-              onToggleExpanded={() => setVisualExpanded(true)}
-              onSelectPosition={(position) => handleSelectToken(position)}
-            />
-          )}
-
-          <section className="ct-panel">
-            <h2 className="ct-section-label">PROMPT OUTPUT</h2>
-            <h3 className="ct-subheading">Prompt tokens</h3>
-            <div className="ct-table-wrap">
-              <table className="ct-table" data-testid="token-table">
-                <thead>
-                  <tr>
-                    <th>Position</th>
-                    <th>Token</th>
-                    <th>ID</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {analysis?.tokens.map((token) => (
-                    <tr key={token.position}>
-                      <td>{token.position}</td>
-                      <td>{token.text}</td>
-                      <td>{token.token_id}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <h3 className="ct-subheading">Five most likely next tokens</h3>
-            <div className="ct-table-wrap">
-              <table className="ct-table" data-testid="next-token-table">
-                <thead>
-                  <tr>
-                    <th>Rank</th>
-                    <th>Token</th>
-                    <th>ID</th>
-                    <th>Probability</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {analysis?.next_tokens.map((token) => (
-                    <tr key={token.rank}>
-                      <td>{token.rank}</td>
-                      <td>{token.text}</td>
-                      <td>{token.token_id}</td>
-                      <td>{token.probability.toFixed(4)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            ) : null}
           </section>
         </main>
       </div>

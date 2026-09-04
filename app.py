@@ -1,6 +1,5 @@
 import base64
 import gc
-import json
 import logging
 import threading
 from contextlib import contextmanager
@@ -14,23 +13,37 @@ import tensorflow as tf
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from analysis import AnalysisError, PromptAnalysis, analyze_prompt
+from analysis import AnalysisError, PromptAnalysis, analyze_prompt, display_text
+from checkpoint import CheckpointError, LoadedCheckpoint, load_checkpoint
 from charts import (
     display_bounds,
-    render_activation_heatmap,
-    render_token_distribution,
-    render_token_magnitudes,
-    tensor_statistics,
+    display_bounds_union,
+    grid_shape,
+    render_entropy_strip,
+    render_pattern_heatmap,
+    render_readout_topk,
+    render_token_map_row,
 )
-from checkpoint import CheckpointError, LoadedCheckpoint, load_checkpoint
 from inspection import (
-    DEFAULT_LOCATION_KEY,
-    LOCATIONS,
+    BRANCHES,
+    DEFAULT_NODE_KEY,
+    EMBEDDING_COMPONENTS,
+    SPINE_LINKS,
+    SPINE_STATES,
+    STREAM_NODES,
+    TRACE_ORDER,
     InspectionError,
-    location_spec,
+    node_spec,
 )
 from model import ARCHITECTURE_NAME, ModelConfig
 
+NEXT_TOKEN_TOP_K = 15
+SHARED_FAMILIES = {
+    "components",
+    "stream_raw",
+    "updates",
+    "stream_norm",
+}
 
 LOGGER = logging.getLogger(__name__)
 LOCAL_SERVER_NAME = "127.0.0.1"
@@ -39,11 +52,6 @@ SHARE_PUBLICLY = False
 SPA_DIST_DIR = Path(__file__).resolve().parent / "frontend" / "dist"
 
 INSPECT_AWAITING = "Analyze a prompt to capture every internal location."
-
-RESIDUAL_STREAM = "Residual Stream"
-ATTENTION = "Attention"
-FFN = "FFN"
-OUTPUT = "Output"
 
 
 @dataclass(frozen=True)
@@ -138,65 +146,6 @@ def config_metadata(config: Optional[ModelConfig]) -> dict:
         "feed_forward_dim": config.feed_forward_dim,
         "dropout_rate": config.dropout_rate,
     }
-
-
-def _model_stages(config: Optional[ModelConfig]) -> list:
-    """Ordered model path as plain data for the frontend to render."""
-    details = {
-        "embedding": (
-            None if config is None
-            else f"sequence <= {config.max_len}, width {config.embedding_dim}"
-        ),
-        "attention_update": (
-            None if config is None
-            else f"{config.num_heads} heads x {config.key_dim}, "
-                 f"width {config.embedding_dim}"
-        ),
-        "attention_residual": "input + update",
-        "attention_norm": "post-norm",
-        "ffn_hidden": (
-            None if config is None else f"hidden width {config.feed_forward_dim}"
-        ),
-        "ffn_update": (
-            None if config is None else f"width {config.embedding_dim}"
-        ),
-        "ffn_residual": "normalized attention + update",
-        "output_norm": "post-norm block output",
-        "vocabulary_projection": (
-            None if config is None else f"softmax over {config.vocab_size} tokens"
-        ),
-    }
-    names = {
-        "embedding": "Token + position embeddings",
-        "attention_update": "Causal attention update",
-        "attention_residual": "Attention residual addition",
-        "attention_norm": "First layer normalization",
-        "ffn_hidden": "FFN hidden activation",
-        "ffn_update": "FFN update",
-        "ffn_residual": "FFN residual addition",
-        "output_norm": "Final layer normalization",
-        "vocabulary_projection": "Vocabulary projection + softmax",
-    }
-    categories = {
-        "embedding": RESIDUAL_STREAM,
-        "attention_update": ATTENTION,
-        "attention_residual": RESIDUAL_STREAM,
-        "attention_norm": RESIDUAL_STREAM,
-        "ffn_hidden": FFN,
-        "ffn_update": FFN,
-        "ffn_residual": RESIDUAL_STREAM,
-        "output_norm": RESIDUAL_STREAM,
-        "vocabulary_projection": OUTPUT,
-    }
-    return [
-        {
-            "key": key,
-            "name": names[key],
-            "category": categories[key],
-            "detail": details[key],
-        }
-        for key in names
-    ]
 
 
 def _decode_plotly_json(value):
@@ -359,7 +308,6 @@ def load_model_payload(manager: ModelManager, directory) -> dict:
             "loaded": False,
             "meta": config_metadata(None),
             "device_label": None,
-            "stages": _model_stages(None),
             "summary": None,
         }
     config = state.checkpoint.config
@@ -371,7 +319,6 @@ def load_model_payload(manager: ModelManager, directory) -> dict:
         "loaded": True,
         "meta": meta,
         "device_label": state.device.label,
-        "stages": _model_stages(config),
         "summary": format_model_summary(state.checkpoint.model),
     }
 
@@ -424,36 +371,143 @@ def _clamp_position(position, token_count: int) -> int:
     return max(0, min(int(position), token_count - 1))
 
 
-def inspect_payload(
-    manager: ModelManager,
-    location_key: Optional[str] = None,
-    token_position: Optional[int] = None,
-    clipped: bool = False,
-) -> dict:
-    """Re-render inspection views from stored data; never reruns the model."""
-    awaiting = {
+def _graph_payload() -> dict:
+    """Declarative wiring of the one-block model for the frontend to draw."""
+    nodes = [
+        {
+            "key": spec.key,
+            "label": spec.label,
+            "kind": spec.kind,
+            "family": spec.family,
+            "explanation": spec.explanation,
+            "normalized": spec.normalized,
+            "feature_axis": spec.feature_axis,
+        }
+        for spec in STREAM_NODES
+    ]
+    trace = list(TRACE_ORDER)
+    by_key = {item["key"]: item for item in nodes}
+    for index, key in enumerate(trace):
+        by_key[key]["trace_index"] = index
+        by_key[key]["trace_count"] = len(trace)
+        by_key[key]["prev_key"] = trace[index - 1] if index > 0 else None
+        by_key[key]["next_key"] = (
+            trace[index + 1] if index < len(trace) - 1 else None
+        )
+    return {
+        "nodes": nodes,
+        "spine": list(SPINE_STATES),
+        "spine_links": list(SPINE_LINKS),
+        "branches": [
+            {
+                "key": branch["key"],
+                "label": branch["label"],
+                "reads": branch["reads"],
+                "adds_before": branch["adds_before"],
+                "nodes": list(branch["nodes"]),
+            }
+            for branch in BRANCHES
+        ],
+        "components": list(EMBEDDING_COMPONENTS),
+        "trace": trace,
+        "default_node": DEFAULT_NODE_KEY,
+    }
+
+
+def _node_info_payload(key: str) -> dict:
+    spec = node_spec(key)
+    trace = list(TRACE_ORDER)
+    index = trace.index(key)
+    return {
+        "key": spec.key,
+        "label": spec.label,
+        "kind": spec.kind,
+        "family": spec.family,
+        "explanation": spec.explanation,
+        "normalized": spec.normalized,
+        "feature_axis": spec.feature_axis,
+        "trace_index": index,
+        "trace_count": len(trace),
+        "prev_key": trace[index - 1] if index > 0 else None,
+        "next_key": trace[index + 1] if index < len(trace) - 1 else None,
+    }
+
+
+def _family_arrays(analysis: PromptAnalysis, family: str):
+    from inspection import family_keys
+
+    return [
+        analysis.capture.locations[key]
+        for key in family_keys(family)
+        if key in analysis.capture.locations
+    ]
+
+
+def _entropy(probabilities: np.ndarray) -> np.ndarray:
+    positive = probabilities > 0.0
+    logs = np.zeros_like(probabilities)
+    logs[positive] = np.log(probabilities[positive])
+    return -np.sum(probabilities * logs, axis=1)
+
+
+def _readout_rows(
+    probabilities: np.ndarray,
+    position: int,
+    checkpoint: LoadedCheckpoint,
+    top_k: int,
+) -> list:
+    row = probabilities[position]
+    k = min(top_k, checkpoint.config.vocab_size)
+    top = np.argsort(-row)[:k]
+    return [
+        {
+            "rank": rank,
+            "text": display_text(int(token_id), checkpoint.vocabulary),
+            "token_id": int(token_id),
+            "probability": float(row[token_id]),
+        }
+        for rank, token_id in enumerate(top, start=1)
+    ]
+
+
+def _awaiting_payload(state: str, message: str) -> dict:
+    return {
         "ok": True,
-        "state": "awaiting",
-        "message": INSPECT_AWAITING,
-        "location": None,
+        "state": state,
+        "message": message,
+        "node": None,
         "selected_position": None,
         "token_choices": [],
         "shape": None,
         "capture": None,
-        "selected_stats": None,
-        "heatmap": None,
-        "magnitude": None,
-        "distribution": None,
+        "scale": None,
+        "tile": None,
+        "figure_kind": None,
+        "map_figure": None,
+        "pattern_figure": None,
+        "readout_figure": None,
+        "entropy_figure": None,
+        "readout_rows": [],
     }
+
+
+def inspect_node_payload(
+    manager: ModelManager,
+    node_key: Optional[str] = None,
+    token_position: Optional[int] = None,
+    clipped: bool = False,
+) -> dict:
+    """Render the chosen stream node from stored captures; never reruns the
+    model."""
     session = manager.inspection_session
     if session is None:
-        return awaiting
+        return _awaiting_payload("awaiting", INSPECT_AWAITING)
 
-    key = location_key or DEFAULT_LOCATION_KEY
+    key = node_key or DEFAULT_NODE_KEY
     try:
-        spec = location_spec(key)
+        spec = node_spec(key)
     except InspectionError as error:
-        return {**awaiting, "state": "error", "message": str(error)}
+        return _awaiting_payload("error", str(error))
 
     analysis = session.analysis
     token_count = analysis.token_count
@@ -462,74 +516,148 @@ def inspect_payload(
         if token_position is None
         else _clamp_position(token_position, token_count)
     )
-    values = analysis.capture.locations[spec.key]
+    token_labels = [
+        f"{token.position}: {token.text}" for token in analysis.tokens
+    ]
+    token_choices = [
+        {"position": token.position, "text": token.text}
+        for token in analysis.tokens
+    ]
+    payload = _awaiting_payload("ready", "")
+    payload["node"] = _node_info_payload(key)
+    payload["selected_position"] = position
+    payload["token_choices"] = token_choices
+
+    kind = spec.kind
+    if kind == "readout":
+        return _readout_payload(payload, manager, analysis, position, token_labels)
+
+    values = analysis.capture.locations[key]
     seq_len, width = values.shape
-    labels = [f"{token.position}: {token.text}" for token in analysis.tokens]
-    stats = tensor_statistics(values[position])
-    lower, upper = display_bounds(values, bool(clipped))
-    return {
-        "ok": True,
-        "state": "ready",
-        "message": "",
-        "location": {
-            "key": spec.key,
-            "label": spec.label,
-            "category": spec.category,
-            "explanation": spec.explanation,
-            "normalized": spec.normalized,
-        },
-        "selected_position": position,
-        "token_choices": [
-            {"position": token.position, "text": token.text}
-            for token in analysis.tokens
-        ],
-        "shape": {"seq_len": int(seq_len), "width": int(width)},
-        "capture": {
-            "min": float(values.min()),
-            "mean": float(values.mean()),
-            "max": float(values.max()),
-        },
-        "selected_stats": {
-            "norm": float(stats.norm),
-            "mean": float(stats.mean),
-            "standard_deviation": float(stats.standard_deviation),
-            "minimum": float(stats.minimum),
-            "maximum": float(stats.maximum),
-        },
-        "heatmap": {
+    payload["shape"] = {"seq_len": int(seq_len), "width": int(width)}
+    payload["capture"] = {
+        "min": float(values.min()),
+        "mean": float(values.mean()),
+        "max": float(values.max()),
+    }
+    payload["figure_kind"] = "hidden" if kind == "hidden" else "activation"
+
+    if kind == "pattern":
+        payload["figure_kind"] = "pattern"
+        payload["pattern_figure"] = _figure_payload(
+            render_pattern_heatmap(values, token_labels, position)
+        )
+        return payload
+
+    tile_rows, tile_cols = grid_shape(width)
+    payload["tile"] = {
+        "rows": int(tile_rows),
+        "cols": int(tile_cols),
+    }
+
+    if kind == "hidden":
+        flat = values.reshape(-1)
+        if bool(clipped):
+            upper = float(np.percentile(flat, 99.0))
+        else:
+            upper = float(np.max(flat))
+        if upper <= 0.0:
+            upper = 1.0
+        payload["scale"] = {
+            "lower": 0.0,
+            "upper": upper,
+            "clipped": bool(clipped),
+            "family": spec.family,
+            "source": "matrix",
+        }
+        payload["map_figure"] = _figure_payload(
+            render_token_map_row(
+                values,
+                token_labels,
+                position,
+                bounds=(0.0, upper),
+                colorscale="Viridis",
+                title=(
+                    f"FFN hidden activation (visible range: 0 to {upper:.4f})"
+                ),
+            )
+        )
+    else:
+        family = spec.family
+        shared = family in SHARED_FAMILIES
+        if shared:
+            lower, upper = display_bounds_union(
+                _family_arrays(analysis, family), bool(clipped)
+            )
+        else:
+            lower, upper = display_bounds(values, bool(clipped))
+        payload["scale"] = {
             "lower": float(lower),
             "upper": float(upper),
             "clipped": bool(clipped),
-        },
-        "magnitude": _figure_payload(
-            render_token_magnitudes(values, labels, position)
-        ),
-        "heatmap_figure": _figure_payload(
-            render_activation_heatmap(values, labels, position, bool(clipped))
-        ),
-        "distribution": _figure_payload(
-            render_token_distribution(
-                values[position], position, labels[position]
+            "family": family,
+            "source": "family" if shared else "matrix",
+        }
+        payload["map_figure"] = _figure_payload(
+            render_token_map_row(
+                values,
+                token_labels,
+                position,
+                bounds=(lower, upper),
+                colorscale="RdBu",
+                title=(
+                    f"Token activation maps (visible range: "
+                    f"{lower:.4f} to {upper:.4f}"
+                    + (", percentile clipped)" if bool(clipped) else ")")
+                ),
             )
-        ),
+        )
+
+    return payload
+
+
+def _readout_payload(payload, manager, analysis, position, token_labels) -> dict:
+    state = manager.loaded_state
+    if state is None:
+        return _awaiting_payload("error", "Load a checkpoint before the readout.")
+    checkpoint = state.checkpoint
+    probabilities = analysis.capture.probabilities
+    payload["shape"] = {
+        "seq_len": int(probabilities.shape[0]),
+        "width": int(probabilities.shape[1]),
     }
+    payload["figure_kind"] = "readout_topk"
+    payload["readout_rows"] = _readout_rows(
+        probabilities, position, checkpoint, NEXT_TOKEN_TOP_K
+    )
+    payload["readout_figure"] = _figure_payload(
+        render_readout_topk(payload["readout_rows"], token_labels[position])
+    )
+    entropy = _entropy(probabilities)
+    payload["capture"] = {
+        "min": float(entropy.min()),
+        "mean": float(entropy.mean()),
+        "max": float(entropy.max()),
+    }
+    payload["entropy_figure"] = _figure_payload(
+        render_entropy_strip(token_labels, entropy, position)
+    )
+    return payload
 
 
 def options_payload() -> dict:
-    """Static inspection options and the unloaded model path."""
+    """Static stream graph describing the model wiring."""
     return {
+        "graph": _graph_payload(),
         "locations": [
             {
                 "key": spec.key,
                 "label": spec.label,
-                "category": spec.category,
-                "explanation": spec.explanation,
-                "normalized": spec.normalized,
+                "kind": spec.kind,
+                "family": spec.family,
             }
-            for spec in LOCATIONS
+            for spec in STREAM_NODES
         ],
-        "default_location": DEFAULT_LOCATION_KEY,
-        "default_stages": _model_stages(None),
     }
 
 
@@ -544,12 +672,12 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
             return analyze_prompt_payload(manager, prompt)
 
         def inspect_endpoint(
-            location_key: Optional[str] = None,
+            node_key: Optional[str] = None,
             token_position: Optional[int] = None,
             clipped: bool = False,
         ) -> dict:
-            return inspect_payload(
-                manager, location_key, token_position, clipped
+            return inspect_node_payload(
+                manager, node_key, token_position, clipped
             )
 
         def get_options(_unused: str = "") -> dict:
@@ -557,7 +685,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
 
         gr.api(load_endpoint, api_name="load_checkpoint")
         gr.api(analyze_endpoint, api_name="analyze_prompt")
-        gr.api(inspect_endpoint, api_name="inspect_location")
+        gr.api(inspect_endpoint, api_name="inspect_node")
         gr.api(get_options, api_name="options")
     return demo
 

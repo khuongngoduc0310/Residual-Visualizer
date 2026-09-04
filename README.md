@@ -105,9 +105,10 @@ Open `http://127.0.0.1:5173`; Vite proxies the model endpoints to the engine on
 Python or the model.
 
 For a quick UI check, use a desktop browser width of at least 1280px. Verify
-that the control rail, model path, activation field, two supporting charts, and
-output tables are visible as a coherent workspace. A magnitude-bar click should
-still update the token selector and the other two charts.
+that the wiring diagram shows one residual line with the attention and FFN
+branches, that analyzing a prompt selects the default **Layer norm · block
+output** node, and that clicking graph chips and the ◀ Previous / Next ▶
+controls move between captured states.
 
 Loading a new checkpoint first releases the current model and clears the old
 details. If the replacement fails, no model remains active. TensorFlow may keep
@@ -119,51 +120,70 @@ released.
 After loading a checkpoint, enter text in **Prompt** and press **Analyze
 Prompt**. The prompt is processed exactly like training text: lowercased,
 punctuation separated by spaces, and split on whitespace using the saved
-vocabulary. The page shows every processed token with its 0-based position,
-text, and numeric token ID, plus the processed token count against the model's
-maximum sequence length.
+vocabulary. Each processed token appears as a selectable chip showing its
+0-based position and text, next to the processed token count against the
+model's maximum sequence length.
 
 Empty prompts and prompts longer than the model maximum are rejected rather
 than silently shortened. Tokens missing from the vocabulary remain allowed and
-are shown as `[UNK]` with a visible warning and count. The five most likely
-next tokens are listed with their IDs and four-decimal probabilities, honestly
-labeling the padding and unknown tokens when they appear. Results stay in
-memory for the session only and are never written to disk.
+are shown as `[UNK]` with a visible warning and count. The top five predicted
+next tokens for the last position are listed inline; select the **Readout**
+node for full top-K bars and per-token entropy. Results stay in memory for the
+session only and are never written to disk.
 
-## Inspect Internal Locations
+## Trace The Residual Stream
 
-The same Analyze Prompt run also captures every internal tensor of the model,
-so you can move through the block without running inference again. Dropout is
-disabled during this run, so repeated runs are deterministic. The captured
-locations are:
+The same Analyze Prompt run captures every internal tensor of the model, so you
+can move through the model without running inference again. Dropout is disabled
+during this run, so repeated runs are deterministic. The capture includes the
+decomposed token and position embeddings, the residual-stream states, the
+attention and FFN updates, the two layer norms, the causal attention pattern
+(mean over heads), and the FFN hidden activation.
 
-| Location | Category |
-| --- | --- |
-| Token + position embeddings | Residual Stream |
-| Attention update | Attention |
-| Attention residual sum | Residual Stream |
-| First normalized output | Residual Stream |
-| FFN hidden activation | FFN |
-| FFN update | FFN |
-| FFN residual sum | Residual Stream |
-| Final block output | Residual Stream |
+The page is organized around a wiring diagram. The residual stream is one
+horizontal line from the embeddings through the two "add" junctions and layer
+norms to the readout. The attention and FFN blocks hang off that line as
+parallel branches: they read the stream, compute, and write their output back
+at the add junction. Every chip in the diagram is a captured state you can
+select:
 
-After a successful analysis, the **Location** and **Token position** selectors
-are filled in and default to the **Final block output** of the last processed
-prompt token. The model diagram highlights the selected location, a short
-plain-language explanation describes what the tensor contains, and three
-coordinated Plotly views show token magnitudes, the token-by-dimension tensor,
-and the selected token's dimension distribution. Token labels include their
-positions, so repeated text remains distinguishable. Click a token-magnitude
-bar or use the position-aware selector to change the selected token. Changing
-either selector re-renders from the captured data only and never runs the model
-again.
+| Node | Kind | Notes |
+| --- | --- | --- |
+| Token embeddings | component | one half of the stream input |
+| Position embeddings | component | the other half of the stream input |
+| Residual stream input | stream | token + position embeddings |
+| Causal attention pattern | pattern | query × key weights, mean over heads |
+| Attention output → residual | update | what attention writes into the stream |
+| Residual stream after attention | stream | stream input + attention update |
+| Layer norm after attention | ln | normalization sitting on the line |
+| FFN hidden (ReLU) | hidden | non-negative, sequential color scale |
+| FFN output → residual | update | what the FFN writes into the stream |
+| Residual stream after FFN | stream | normalized attention + FFN update |
+| Layer norm block output | ln | the value the readout reads |
+| Readout probabilities | readout | top-K next tokens + entropy |
 
-The heatmap reports its visible zero-centered range. The optional percentile
-clipping control changes only the displayed color bounds; captured values and
-the distribution remain unchanged. Normalized locations explain that their
-token magnitudes may appear nearly flat because layer normalization fixes the
+Exactly one node's view is rendered at a time. Selecting a chip — or stepping
+with ◀ Previous / Next ▶, the trace dropdown, or the token chips — shows that
+node's captured tensor as one **row of square heatmaps**: each token gets its
+own square tile in a single heatmap, the selected token's tile is outlined in
+red, and the row scrolls horizontally when the prompt is long. A token's
+width-256 vector is laid out row-major as a 16×16 grid (other widths use the
+factor pair closest to a square). Select a token from the chips, the position
+dropdown, or by clicking any cell of its tile. Changing any selection
+re-renders from captured data only and never runs the model again.
+
+Color scales are shared within a family so magnitudes stay comparable while you
+step along the stream: the three raw stream states, the two updates, the two
+layer-norm outputs, and the two embedding components each use one scale. The
+**Clip extremes** percentile control and the family scale only affect displayed
+color bounds; captured values are unchanged. Normalized nodes explain that
+their magnitudes may look nearly flat because layer normalization fixes the
 feature scale.
+
+The readout node renders for the selected token: the most likely next tokens as
+horizontal bars and a per-token entropy strip showing uncertainty across the
+whole prompt. It is derived from the captured probabilities, whose ordering
+matches the pre-softmax logits.
 
 Captured tensors live in memory for the session only. They are cleared when a
 new checkpoint is loaded, replaced by a fresh analysis, or dropped after a

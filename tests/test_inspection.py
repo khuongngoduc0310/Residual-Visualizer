@@ -4,16 +4,15 @@ import tensorflow as tf
 
 from checkpoint import load_checkpoint, save_checkpoint
 from inspection import (
-    ATTENTION,
-    DEFAULT_LOCATION_KEY,
-    FFN,
-    LOCATION_KEYS,
-    RESIDUAL_STREAM,
+    CAPTURED_KEYS,
+    DEFAULT_NODE_KEY,
+    FAMILY_NODES,
+    TRACE_ORDER,
     CapturedRun,
     InspectionError,
     capture_locations,
-    location_choices,
-    location_spec,
+    family_keys,
+    node_spec,
 )
 from model import ModelConfig, build_model
 
@@ -48,16 +47,19 @@ def token_ids(prompt):
     return tf.constant([vocabulary[token] for token in prompt.split()])
 
 
-def test_capture_returns_every_location_with_expected_shape(loaded_checkpoint):
+def test_capture_returns_every_tensor_with_expected_shape(loaded_checkpoint):
     ids = token_ids("hello , world !")
     captured = capture_locations(loaded_checkpoint, ids)
 
     assert isinstance(captured, CapturedRun)
     assert captured.token_count == 4
-    assert set(captured.locations) == set(LOCATION_KEYS)
+    assert set(captured.locations) == set(CAPTURED_KEYS)
     for key, tensor in captured.locations.items():
-        width = 12 if key == "ffn_hidden" else 8
-        assert tensor.shape == (4, width), key
+        if key == "attention_pattern":
+            assert tensor.shape == (4, 4), key
+        else:
+            width = 12 if key == "ffn_hidden" else 8
+            assert tensor.shape == (4, width), key
     assert captured.probabilities.shape == (4, len(VOCABULARY))
 
 
@@ -67,8 +69,11 @@ def test_single_token_capture_keeps_two_dimensional_shapes(loaded_checkpoint):
     assert captured.token_count == 1
     assert captured.probabilities.shape == (1, len(VOCABULARY))
     for key, tensor in captured.locations.items():
-        width = 12 if key == "ffn_hidden" else 8
-        assert tensor.shape == (1, width), key
+        if key == "attention_pattern":
+            assert tensor.shape == (1, 1), key
+        else:
+            width = 12 if key == "ffn_hidden" else 8
+            assert tensor.shape == (1, width), key
 
 
 def test_captured_final_output_matches_normal_model_inference(
@@ -96,7 +101,7 @@ def test_capture_is_deterministic_with_dropout_disabled(loaded_checkpoint):
     first = capture_locations(loaded_checkpoint, ids)
     second = capture_locations(loaded_checkpoint, ids)
 
-    for key in LOCATION_KEYS:
+    for key in CAPTURED_KEYS:
         np.testing.assert_array_equal(first.locations[key], second.locations[key])
     np.testing.assert_array_equal(first.probabilities, second.probabilities)
 
@@ -114,9 +119,12 @@ def test_capture_rejects_over_maximum_token_ids(loaded_checkpoint):
         )
 
 
-def test_location_catalog_is_complete_and_classified():
-    assert LOCATION_KEYS == (
+def test_node_catalog_is_complete_and_ordered():
+    assert TRACE_ORDER == (
+        "token_embeddings",
+        "position_embeddings",
         "embedding",
+        "attention_pattern",
         "attention_update",
         "attention_residual",
         "attention_norm",
@@ -124,50 +132,52 @@ def test_location_catalog_is_complete_and_classified():
         "ffn_update",
         "ffn_residual",
         "output_norm",
+        "readout",
     )
-    assert DEFAULT_LOCATION_KEY == "output_norm"
+    assert DEFAULT_NODE_KEY == "output_norm"
+    assert CAPTURED_KEYS == TRACE_ORDER[:-1]
 
 
-def test_location_specs_have_categories_and_explanations():
-    from inspection import LOCATIONS
+def test_node_specs_have_families_kinds_and_explanations():
+    from inspection import STREAM_NODES
 
-    assert len(LOCATIONS) == 8
-    assert tuple(spec.key for spec in LOCATIONS) == LOCATION_KEYS
-    for spec in LOCATIONS:
-        assert spec.category in {RESIDUAL_STREAM, ATTENTION, FFN}
-        assert spec.explanation.strip()
-        assert spec.label.strip()
-    assert {spec.key: spec.category for spec in LOCATIONS} == {
-        "embedding": RESIDUAL_STREAM,
-        "attention_update": ATTENTION,
-        "attention_residual": RESIDUAL_STREAM,
-        "attention_norm": RESIDUAL_STREAM,
-        "ffn_hidden": FFN,
-        "ffn_update": FFN,
-        "ffn_residual": RESIDUAL_STREAM,
-        "output_norm": RESIDUAL_STREAM,
-    }
-    assert {spec.key: spec.normalized for spec in LOCATIONS} == {
-        "embedding": False,
-        "attention_update": False,
-        "attention_residual": False,
-        "attention_norm": True,
-        "ffn_hidden": False,
-        "ffn_update": False,
-        "ffn_residual": False,
-        "output_norm": True,
-    }
+    assert len(STREAM_NODES) == len(TRACE_ORDER)
+    assert tuple(node.key for node in STREAM_NODES) == TRACE_ORDER
+    for node in STREAM_NODES:
+        assert node.family in set(FAMILY_NODES)
+        assert node.explanation.strip()
+        assert node.label.strip()
+        assert node.key in family_keys(node.family)
 
 
-def test_location_choices_are_labeled_and_ordered():
-    choices = location_choices()
+def test_shared_scale_families_group_the_residual_path():
+    assert family_keys("stream_raw") == (
+        "embedding",
+        "attention_residual",
+        "ffn_residual",
+    )
+    assert family_keys("updates") == ("attention_update", "ffn_update")
+    assert family_keys("stream_norm") == ("attention_norm", "output_norm")
+    assert family_keys("components") == (
+        "token_embeddings",
+        "position_embeddings",
+    )
+    assert family_keys("hidden") == ("ffn_hidden",)
+    assert family_keys("pattern") == ("attention_pattern",)
+    assert family_keys("readout") == ("readout",)
 
-    assert len(choices) == 8
-    assert [value for _, value in choices] == list(LOCATION_KEYS)
-    assert all(" \u00b7 " in label for label, _ in choices)
-    assert choices[-1] == ("Residual Stream \u00b7 Final block output", "output_norm")
+
+def test_normalized_nodes_are_only_the_layer_norms():
+    from inspection import STREAM_NODES
+
+    normalized = {node.key for node in STREAM_NODES if node.normalized}
+    assert normalized == {"attention_norm", "output_norm"}
+    pattern = next(node for node in STREAM_NODES if node.key == "attention_pattern")
+    assert pattern.feature_axis is False
+    readout = next(node for node in STREAM_NODES if node.key == "readout")
+    assert readout.feature_axis is False
 
 
-def test_unknown_location_key_is_rejected():
-    with pytest.raises(InspectionError, match="Unknown internal location"):
-        location_spec("nonsense")
+def test_unknown_node_key_is_rejected():
+    with pytest.raises(InspectionError, match="Unknown stream node"):
+        node_spec("nonsense")

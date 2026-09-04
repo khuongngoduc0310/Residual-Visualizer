@@ -5,43 +5,75 @@ import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import type {
   AnalyzePayload,
+  GraphNode,
   InspectPayload,
   LoadPayload,
   OptionsPayload,
 } from "./types";
 
 vi.mock("./components/PlotlyFigure", () => ({
-  PlotlyFigure: () => null,
+  PlotlyFigure: (props: { "data-testid"?: string }) => (
+    <div data-testid={props["data-testid"]} />
+  ),
 }));
 
 const engine = vi.hoisted(() => ({
   getOptions: vi.fn(),
   loadCheckpoint: vi.fn(),
   analyzePrompt: vi.fn(),
-  inspectLocation: vi.fn(),
+  inspectNode: vi.fn(),
 }));
 
 vi.mock("./api/client", () => engine);
 
+const nodeKeys = [
+  "embedding",
+  "attention_residual",
+  "output_norm",
+  "readout",
+];
+
+function graphNode(
+  key: string,
+  label: string,
+  kind: GraphNode["kind"],
+  family: GraphNode["family"],
+  featureAxis = true,
+): GraphNode {
+  const trace = ["embedding", "attention_update", "attention_residual", "output_norm", "readout"];
+  const index = trace.indexOf(key);
+  return {
+    key,
+    label,
+    kind,
+    family,
+    explanation: `${label} explanation.`,
+    normalized: kind === "ln",
+    feature_axis: featureAxis,
+    trace_index: index,
+    trace_count: trace.length,
+    prev_key: index > 0 ? trace[index - 1] : null,
+    next_key: index < trace.length - 1 ? trace[index + 1] : null,
+  };
+}
+
 const optionsFixture: OptionsPayload = {
-  locations: [
-    {
-      key: "output_norm",
-      label: "Final block output",
-      category: "Residual Stream",
-      explanation: "The final layer-normalized block output.",
-      normalized: true,
-    },
-  ],
-  default_location: "output_norm",
-  default_stages: [
-    {
-      key: "embedding",
-      name: "Token + position embeddings",
-      category: "Residual Stream",
-      detail: null,
-    },
-  ],
+  graph: {
+    nodes: [
+      graphNode("embedding", "Residual stream input", "stream", "stream_raw"),
+      graphNode("attention_update", "Attention output → residual", "update", "updates"),
+      graphNode("attention_residual", "Residual stream after attention", "stream", "stream_raw"),
+      graphNode("output_norm", "Layer norm block output", "ln", "stream_norm"),
+      graphNode("readout", "Readout probabilities", "readout", "readout", false),
+    ],
+    spine: ["embedding", "attention_residual", "output_norm"],
+    spine_links: ["attention-add", "layer-norm", "readout"],
+    branches: [],
+    components: [],
+    trace: nodeKeys,
+    default_node: "output_norm",
+  },
+  locations: [],
 };
 
 const loadFixture: LoadPayload = {
@@ -60,20 +92,6 @@ const loadFixture: LoadPayload = {
     dropout_rate: 0,
   },
   device_label: "CPU",
-  stages: [
-    {
-      key: "embedding",
-      name: "Token + position embeddings",
-      category: "Residual Stream",
-      detail: "sequence <= 6, width 8",
-    },
-    {
-      key: "output_norm",
-      name: "Final layer normalization",
-      category: "Residual Stream",
-      detail: "post-norm block output",
-    },
-  ],
   summary: "one_block_post_norm_causal_lm\n",
 };
 
@@ -92,18 +110,20 @@ const analyzeFixture: AnalyzePayload = {
   ],
 };
 
-function inspectFixture(): InspectPayload {
+function nodeInfo(key: string): GraphNode {
+  const fallback = graphNode(key, key, "stream", "stream_raw");
+  const node = optionsFixture.graph.nodes.find((item) => item.key === key);
+  return node ?? fallback;
+}
+
+function inspectFixture(key: string | null): InspectPayload {
+  const nodeKey = key ?? "output_norm";
+  const node = nodeInfo(nodeKey);
   return {
     ok: true,
     state: "ready",
     message: "",
-    location: {
-      key: "output_norm",
-      label: "Final block output",
-      category: "Residual Stream",
-      explanation: "The final layer-normalized block output.",
-      normalized: true,
-    },
+    node,
     selected_position: 1,
     token_choices: [
       { position: 0, text: "hello" },
@@ -111,17 +131,14 @@ function inspectFixture(): InspectPayload {
     ],
     shape: { seq_len: 2, width: 8 },
     capture: { min: -1, mean: 0, max: 1 },
-    selected_stats: {
-      norm: 1,
-      mean: 0,
-      standard_deviation: 0.5,
-      minimum: -1,
-      maximum: 1,
-    },
-    heatmap: { lower: -1, upper: 1, clipped: false },
-    magnitude: { data: [{}], layout: {} },
-    heatmap_figure: { data: [{}], layout: {} },
-    distribution: { data: [{}], layout: {} },
+    scale: { lower: -1, upper: 1, clipped: false, family: node.family, source: "family" },
+    tile: node.feature_axis ? { rows: 2, cols: 4 } : null,
+    figure_kind: node.kind === "readout" ? "readout_topk" : "activation",
+    map_figure: node.feature_axis ? { data: [{}], layout: {} } : null,
+    pattern_figure: null,
+    readout_figure: node.kind === "readout" ? { data: [{}], layout: {} } : null,
+    entropy_figure: null,
+    readout_rows: [],
   };
 }
 
@@ -130,18 +147,20 @@ beforeEach(() => {
   engine.getOptions.mockResolvedValue(optionsFixture);
   engine.loadCheckpoint.mockResolvedValue(loadFixture);
   engine.analyzePrompt.mockResolvedValue(analyzeFixture);
-  engine.inspectLocation.mockResolvedValue(inspectFixture());
+  engine.inspectNode.mockImplementation(async (key: string | null) =>
+    inspectFixture(key),
+  );
 });
 
 describe("App", () => {
-  it("loads the inspection options on start", async () => {
+  it("loads the stream graph on start", async () => {
     render(<App />);
+
     await waitFor(() => expect(engine.getOptions).toHaveBeenCalledTimes(1));
-    expect(
-      await screen.findByRole("option", {
-        name: /Residual Stream · Final block output/,
-      }),
-    ).toBeInTheDocument();
+    expect(await screen.findByTestId("residual-graph")).toBeInTheDocument();
+    expect(screen.getByTestId("residual-graph")).toHaveTextContent(
+      "Residual stream input",
+    );
   });
 
   it("loads a checkpoint and shows its runtime details", async () => {
@@ -163,7 +182,7 @@ describe("App", () => {
     );
   });
 
-  it("analyzes a prompt and inspects the capture", async () => {
+  it("analyzes a prompt and inspects the default node", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -173,11 +192,92 @@ describe("App", () => {
     await waitFor(() =>
       expect(engine.analyzePrompt).toHaveBeenCalledWith("hello ,"),
     );
-    expect(await screen.findByText("hello")).toBeInTheDocument();
-    expect(await screen.findByText("0.2500")).toBeInTheDocument();
-    await waitFor(() => expect(engine.inspectLocation).toHaveBeenCalled());
-    expect(await screen.findByTestId("inspect-text")).toHaveTextContent(
-      "Final block output",
+    expect(await screen.findByText(/world/)).toBeInTheDocument();
+    await waitFor(() => expect(engine.inspectNode).toHaveBeenCalled());
+    expect(await screen.findByTestId("node-label")).toHaveTextContent(
+      "Layer norm block output",
+    );
+    expect(screen.getByTestId("node-primary-plot")).toBeInTheDocument();
+  });
+
+  it("clicks a graph chip to inspect that node", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(screen.getByLabelText(/Prompt/), "hello ,");
+    await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("node-label")).toHaveTextContent(
+        "Layer norm block output",
+      ),
+    );
+
+    const graph = screen.getByTestId("residual-graph");
+    const chip = graph.querySelector('[data-node="attention_residual"]');
+    expect(chip).not.toBeNull();
+    await user.click(chip as Element);
+
+    await waitFor(() =>
+      expect(engine.inspectNode).toHaveBeenLastCalledWith(
+        "attention_residual",
+        expect.anything(),
+        false,
+      ),
+    );
+    expect(await screen.findByTestId("node-label")).toHaveTextContent(
+      "Residual stream after attention",
+    );
+  });
+
+  it("steps to the next node in the trace", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(screen.getByLabelText(/Prompt/), "hello ,");
+    await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("node-label")).toHaveTextContent(
+        "Layer norm block output",
+      ),
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: /next node in the stream/i }),
+    );
+
+    await waitFor(() =>
+      expect(engine.inspectNode).toHaveBeenLastCalledWith(
+        "readout",
+        expect.anything(),
+        false,
+      ),
+    );
+    expect(await screen.findByTestId("node-label")).toHaveTextContent(
+      "Readout probabilities",
+    );
+  });
+
+  it("selecting a token re-inspects the same node", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(screen.getByLabelText(/Prompt/), "hello ,");
+    await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("node-label")).toHaveTextContent(
+        "Layer norm block output",
+      ),
+    );
+
+    const tokenSelect = await screen.findByTestId("token-select");
+    await user.selectOptions(tokenSelect, "0");
+
+    await waitFor(() =>
+      expect(engine.inspectNode).toHaveBeenLastCalledWith(
+        "output_norm",
+        0,
+        false,
+      ),
     );
   });
 });

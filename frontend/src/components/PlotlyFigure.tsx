@@ -55,8 +55,10 @@ export function PlotlyFigure({
       modeBarButtonsToRemove: ["lasso2d", "select2d"],
     };
 
-    Plotly.react(host, figure.data, layout, config).catch(() => {
-      // A transient render failure should not take down the app.
+    Plotly.react(host, figure.data, layout, config).catch((reason: unknown) => {
+      // A transient render failure should not take down the app, but it must
+      // not stay invisible either.
+      console.warn("Plotly render failed", reason);
     });
     host.removeAllListeners("plotly_click");
     host.on("plotly_click", (event) => {

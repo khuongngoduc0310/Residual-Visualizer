@@ -4,7 +4,7 @@ import tensorflow as tf
 
 from analysis import AnalysisError, analyze_prompt, display_text
 from checkpoint import load_checkpoint, save_checkpoint
-from inspection import LOCATION_KEYS, capture_locations
+from inspection import CAPTURED_KEYS, capture_locations
 from model import ModelConfig, build_model
 from preprocess import PADDING_TOKEN_ID
 
@@ -125,9 +125,9 @@ def test_analysis_captures_every_location_in_the_same_run(loaded_checkpoint):
     )[0]
     direct = capture_locations(loaded_checkpoint, ids)
 
-    assert set(analysis.capture.locations) == set(LOCATION_KEYS)
+    assert set(analysis.capture.locations) == set(CAPTURED_KEYS)
     assert analysis.capture.token_count == analysis.token_count
-    for key in LOCATION_KEYS:
+    for key in CAPTURED_KEYS:
         np.testing.assert_allclose(
             analysis.capture.locations[key],
             direct.locations[key],
