@@ -334,6 +334,7 @@ def render_activation_detail(
     pin_positions: Optional[Positions] = None,
     location_label: Optional[str] = None,
     measurement_pin: Optional[Tuple[int, int]] = None,
+    cell_view: str = "detail",
 ) -> go.Figure:
     """Render selected token vectors as either square grids or indexed rows."""
     matrix = _as_matrix(values)
@@ -341,10 +342,12 @@ def render_activation_detail(
     selected = _positions(selected_positions, matrix.shape[0])
     if mode not in {"square", "indexed"}:
         raise ValueError("mode must be 'square' or 'indexed'")
+    if cell_view not in {"overview", "detail"}:
+        raise ValueError("cell_view must be 'overview' or 'detail'")
     lower, upper = display_bounds(matrix, clipped) if bounds is None else bounds
     selected_matrix = matrix[selected]
     selected_customdata = _cell_customdata(
-        selected_matrix, labels, selected, "detail"
+        selected_matrix, labels, selected, cell_view
     )
     if mode == "indexed":
         figure = go.Figure(go.Heatmap(

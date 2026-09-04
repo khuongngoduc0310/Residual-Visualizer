@@ -256,6 +256,25 @@ def test_square_detail_preserves_order_marks_padding_and_discloses_adjacency():
     assert figure.layout.plot_bgcolor == "#e5e7eb"
 
 
+def test_256_dimensions_render_as_an_exact_16_by_16_grid():
+    values = np.arange(256, dtype=float).reshape(1, 256)
+
+    figure = render_activation_detail(values, ["0: token"], [0])
+
+    assert figure.data[0].z.shape == (16, 16)
+    np.testing.assert_array_equal(figure.data[0].z.reshape(-1), values[0])
+
+
+def test_square_tiles_can_publish_overview_click_identity():
+    figure = render_activation_detail(
+        VALUES, LABELS, [0, 1, 2], mode="square", cell_view="overview"
+    )
+
+    assert len(figure.data) == 3
+    assert [trace.customdata[0, 0, 2] for trace in figure.data] == [0, 1, 2]
+    assert all(trace.customdata[0, 0, 1] == "overview" for trace in figure.data)
+
+
 def test_detail_hover_keeps_exact_raw_values_in_both_modes():
     exact = np.nextafter(0.1, 1.0)
     values = np.array([[exact, -2.0, 3.0]])

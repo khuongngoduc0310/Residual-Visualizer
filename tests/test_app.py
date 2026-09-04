@@ -45,6 +45,13 @@ def plot_value(output):
     return output.get("value") if isinstance(output, dict) else output
 
 
+def square_tile_values(figure, width):
+    return np.stack([
+        np.asarray(trace.z).reshape(-1)[:width]
+        for trace in figure.data
+    ])
+
+
 def test_load_callback_loads_checkpoint_and_renders_details(tmp_path):
     config = make_checkpoint(tmp_path)
     manager = app.ModelManager(device_detector=lambda: fake_device())
@@ -270,6 +277,13 @@ def test_create_app_does_not_launch_server():
     demo = app.create_app(app.ModelManager(device_detector=lambda: fake_device()))
 
     assert isinstance(demo, app.gr.Blocks)
+    checkpoint_component = next(
+        component
+        for component in demo.get_config_file()["components"]
+        if component.get("props", {}).get("label")
+        == "Checkpoint folder (server path)"
+    )
+    assert checkpoint_component["props"]["value"] == app.DEFAULT_CHECKPOINT_DIRECTORY
     assert "background: #ffffff" in app.APP_CSS
     assert "ct-expand-visuals" in app.CLICK_BRIDGE_JS
     assert "ct-close-visuals" in app.CLICK_BRIDGE_JS
@@ -308,8 +322,11 @@ def test_analyze_and_inspect_callback_returns_capture_defaults(tmp_path):
     assert clipped is False
     heatmap_plot = plot_value(heatmap_plot)
     assert isinstance(heatmap_plot.data[0], go.Heatmap)
-    assert heatmap_plot.data[0].z.shape == (3, 8)
+    assert len(heatmap_plot.data) == 3
+    assert all(trace.z.shape == (3, 3) for trace in heatmap_plot.data)
+    assert all(trace.customdata[0, 0, 1] == "overview" for trace in heatmap_plot.data)
     values = manager.inspection_session.analysis.capture.locations["output_norm"]
+    np.testing.assert_allclose(square_tile_values(heatmap_plot, 8), values)
     assert (heatmap_plot.data[0].zmin, heatmap_plot.data[0].zmax) == app.display_bounds(values)
     assert "Final block output" in explanation
     assert "Residual Stream" in explanation
@@ -406,12 +423,44 @@ def test_overview_click_toggles_selection_and_drives_detail_overview_transitions
 
     assert selected[0]["value"] == ["1"]
     assert plot_value(selected[5]).data[0].customdata[0, 0, 1] == "detail"
-    assert selected[12]["choices"] == app.SCALE_SCOPE_CHOICES
+    assert 'data-token-position="1"' in selected[12]
+    assert 'class="ct-token-chip ct-selected"' in selected[12]
+    assert selected[13]["choices"] == app.SCALE_SCOPE_CHOICES
     assert cleared[0]["value"] == []
-    assert plot_value(cleared[5]).data[0].z.shape == (3, 8)
-    assert plot_value(cleared[5]).data[0].customdata[0, 0, 1] == "overview"
-    assert cleared[12]["choices"] == app.EMPTY_SELECTION_SCOPE_CHOICES
-    assert cleared[12]["value"] == "location"
+    cleared_square = plot_value(cleared[5])
+    assert len(cleared_square.data) == 3
+    assert all(trace.z.shape == (3, 3) for trace in cleared_square.data)
+    assert cleared_square.data[0].customdata[0, 0, 1] == "overview"
+    assert "ct-token-chip ct-selected" not in cleared[12]
+    assert cleared[13]["choices"] == app.EMPTY_SELECTION_SCOPE_CHOICES
+    assert cleared[13]["value"] == "location"
+
+
+def test_token_context_bar_lists_tokens_and_highlights_selection():
+    tokens = [
+        SimpleNamespace(position=position, text=text)
+        for position, text in enumerate(["the", "wine", "was"])
+    ]
+
+    html = app.render_token_context_html(
+        tokens, [1], "Final block output", (3, 256)
+    )
+
+    assert "Final block output" in html
+    assert "3 \u00d7 256" in html
+    assert html.count("data-token-position=") == 3
+    assert 'data-token-position="0"' in html
+    assert 'class="ct-token-chip ct-selected" data-token-position="1"' in html
+    assert html.count("ct-token-chip ct-selected") == 1
+    assert "1 token selected" in html
+
+    cleared = app.render_token_context_html(tokens, [], "Final block output", (3, 256))
+    assert "ct-token-chip ct-selected" not in cleared
+    assert "No token selected" in cleared
+
+
+def test_token_context_bar_returns_empty_without_tokens():
+    assert app.render_token_context_html([], [], "Final block output", (0, 256)) == ""
 
 
 def test_token_selection_persists_by_position_across_location_navigation(tmp_path):
@@ -777,10 +826,14 @@ def test_comparison_overview_renders_raw_a_b_and_exact_full_delta(tmp_path):
     figure_a = plot_value(outputs[9])
     figure_b = plot_value(outputs[10])
     delta = plot_value(outputs[11])
-    np.testing.assert_array_equal(figure_a.data[0].z, locations["attention_update"])
-    np.testing.assert_array_equal(figure_b.data[0].z, locations["output_norm"])
     np.testing.assert_allclose(
-        delta.data[0].z,
+        square_tile_values(figure_a, 8), locations["attention_update"]
+    )
+    np.testing.assert_allclose(
+        square_tile_values(figure_b, 8), locations["output_norm"]
+    )
+    np.testing.assert_allclose(
+        square_tile_values(delta, 8),
         locations["output_norm"] - locations["attention_update"],
     )
     raw_bounds = app.shared_display_bounds(
@@ -881,16 +934,29 @@ def test_selecting_a_again_or_unpinning_exits_comparison(tmp_path):
     assert all(plot_value(normal[index]) is None for index in (8, 9, 10))
 
 
-def test_empty_selection_is_overview_and_indexed_selection_is_detail(tmp_path):
+def test_empty_selection_uses_square_or_indexed_overview_layout(tmp_path):
     make_checkpoint(tmp_path)
     manager = app.ModelManager(device_detector=lambda: fake_device())
     manager.load(str(tmp_path))
     app.analyze_prompt_callback("hello , world", manager)
 
-    overview = app.select_location_callback("output_norm", [], False, "location", manager)
-    assert overview[4] is None
-    assert isinstance(plot_value(overview[5]), go.Figure)
-    assert plot_value(overview[5]).data[0].z.shape == (3, 8)
+    square = app.select_location_callback(
+        "output_norm", [], False, "location", manager, "square"
+    )
+    square_figure = plot_value(square[5])
+    assert square[4] is None
+    assert len(square_figure.data) == 3
+    assert all(trace.z.shape == (3, 3) for trace in square_figure.data)
+    assert all(trace.customdata[0, 0, 1] == "overview" for trace in square_figure.data)
+
+    indexed = app.select_location_callback(
+        "output_norm", [], False, "location", manager, "indexed"
+    )
+    indexed_figure = plot_value(indexed[5])
+    assert indexed[4] is None
+    assert len(indexed_figure.data) == 1
+    assert indexed_figure.data[0].z.shape == (3, 8)
+    assert indexed_figure.data[0].customdata[0, 0, 1] == "overview"
 
     detail = app.select_location_callback(
         "output_norm", ["1"], False, "capture", manager, "indexed"
@@ -928,7 +994,7 @@ def test_clipping_warning_persists_and_overview_hover_values_stay_raw(tmp_path):
     assert "Captured and hover values remain raw" in visible_range
     heatmap = plot_value(heatmap)
     assert "Display clipped" in heatmap.layout.title.subtitle.text
-    np.testing.assert_array_equal(heatmap.data[0].z, source)
+    np.testing.assert_allclose(square_tile_values(heatmap, source.shape[1]), source)
     assert magnitude is None
     assert distribution is None
 
@@ -1014,20 +1080,28 @@ def test_metadata_overview_keeps_full_tensor_statistics_available():
     assert "Overview of every processed token" in metadata
 
 
-def test_workbench_layout_contract_fixes_context_and_progressively_collapses_panels():
+def test_workbench_layout_contract_is_fluid_above_a_1920_by_1080_minimum():
     css = app.APP_CSS
 
-    assert "height: 100vh !important" in css
+    assert "--ct-workbench-min-width: 1920px" in css
+    assert "--ct-workbench-min-height: 1080px" in css
+    assert "height: max(100vh, var(--ct-workbench-min-height)) !important" in css
+    assert "min-width: var(--ct-workbench-min-width) !important" in css
+    assert "max-width: 1440px" not in css
+    assert "width: min(1440px, 100vw)" not in css
     assert ".ct-workbench" in css and "overflow: hidden !important" in css
+    assert ".ct-center" in css and "flex: 1 1 auto !important" in css
     assert ".ct-canvas-scroll" in css and "overscroll-behavior: contain" in css
-    assert "@media (max-width: 1280px) and (min-width: 761px)" in css
-    assert "@media (max-width: 1080px) and (min-width: 761px)" in css
-    assert "#ct-metadata-panel { display: none !important; }" in css
-    assert "#ct-location-panel { display: none !important; }" in css
+    assert "@media (max-width:" not in css
+    assert "ct-force-open" not in css
     assert "button[data-location-key]" in app.LOCATION_NAV_JS
     assert "trigger('click'" in app.LOCATION_NAV_JS
-    assert "ct-force-open" in app.NAV_TOGGLE_JS
-    assert "ct-force-open" in app.INSPECTOR_TOGGLE_JS
+    assert "matchMedia" not in app.NAV_TOGGLE_JS
+    assert "matchMedia" not in app.INSPECTOR_TOGGLE_JS
+    assert "ct-force-closed" in app.NAV_TOGGLE_JS
+    assert "ct-force-closed" in app.INSPECTOR_TOGGLE_JS
+    assert "ct-toggle-nav" not in app.CLICK_BRIDGE_JS
+    assert "ct-toggle-inspector" not in app.CLICK_BRIDGE_JS
     assert ".ct-activation-plot" in css
     assert "overflow-y: auto !important" in css
 
@@ -1042,12 +1116,14 @@ def test_bridged_location_click_returns_native_selector_and_capture_views(tmp_pa
         "ffn_hidden", [], False, "location", manager
     )
 
-    assert len(outputs) == 13
+    assert len(outputs) == 14
     assert outputs[0]["value"] == "ffn_hidden"
     assert outputs[1]["value"] == []
     assert "FFN hidden activation" in outputs[2]
     assert isinstance(plot_value(outputs[6]), go.Figure)
     assert 'data-current-location="ffn_hidden"' in outputs[8]
+    assert "ct-token-chip" in outputs[13]
+    assert "FFN hidden activation" in outputs[13]
 
 
 def test_detail_mode_changes_keep_selection_literal_order_and_active_bounds(tmp_path):

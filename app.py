@@ -40,6 +40,11 @@ from model import ARCHITECTURE_NAME, ModelConfig
 LOGGER = logging.getLogger(__name__)
 LOCAL_SERVER_NAME = "127.0.0.1"
 SHARE_PUBLICLY = False
+DEFAULT_CHECKPOINT_DIRECTORY = str(
+    Path(__file__).resolve().parent
+    / "checkpoints"
+    / "checkpoint-20260902-204728-v2"
+)
 LIGHT_THEME = gr.themes.Base(
     primary_hue="blue",
     secondary_hue="slate",
@@ -48,6 +53,10 @@ LIGHT_THEME = gr.themes.Base(
 
 
 APP_CSS = """
+:root {
+    --ct-workbench-min-width: 1920px;
+    --ct-workbench-min-height: 1080px;
+}
 html,
 body,
 .gradio-container {
@@ -55,7 +64,8 @@ body,
     color: #111827 !important;
     margin: 0 !important;
     max-width: none !important;
-    min-height: 100vh !important;
+    min-height: var(--ct-workbench-min-height) !important;
+    min-width: var(--ct-workbench-min-width) !important;
     padding: 0 !important;
 }
 .gradio-container {
@@ -63,11 +73,13 @@ body,
 }
 .ct-page {
     box-sizing: border-box;
-    height: 100vh;
+    height: max(100vh, var(--ct-workbench-min-height));
     max-width: none;
+    min-height: var(--ct-workbench-min-height);
+    min-width: var(--ct-workbench-min-width);
     padding: 0.8rem 1rem;
     color: #111827;
-    width: min(1440px, 100vw);
+    width: 100%;
     margin: 0 auto;
 }
 .ct-header {
@@ -367,7 +379,7 @@ body.ct-visual-expanded #ct-visual-panel .ct-chart-main .wrap {
 }
 .ct-header-note p,
 .ct-section-label p {
-    color: #4b5563 !important;
+    color: #374151 !important;
 }
 .ct-title p {
     color: #111827 !important;
@@ -495,48 +507,6 @@ body.ct-visual-expanded #ct-visual-panel .ct-chart-main .wrap {
     flex-basis: 18rem;
 }
 
-@media (max-width: 900px) {
-    html,
-    body,
-    .gradio-container {
-        min-height: 100% !important;
-        overflow: auto !important;
-    }
-    .ct-page {
-        height: auto;
-        min-height: 100vh;
-        padding: 0.75rem;
-    }
-    .ct-header {
-        align-items: flex-start;
-        min-height: 0;
-    }
-    .ct-header-note {
-        display: none !important;
-    }
-    .ct-console {
-        flex-direction: column;
-        height: auto;
-    }
-    .ct-rail,
-    .ct-workspace {
-        height: auto;
-        min-width: 0 !important;
-        overflow: visible;
-        width: 100%;
-    }
-    .ct-control-row,
-    .ct-chart-row,
-    .ct-two-up {
-        flex-direction: column;
-    }
-    .ct-control-row > *,
-    .ct-control-row > :first-child {
-        flex-basis: auto;
-        width: 100%;
-    }
-}
-
 /* Accessible export dialog. The dialog is native-modal, keyboard focusable,
    and never auto-opens; all downloads happen only from explicit actions. */
 #ct-export-dialog {
@@ -661,12 +631,13 @@ body.ct-visual-expanded #ct-visual-panel .ct-chart-main .wrap {
 }
 """
 
-# Issue #9 deliberately overrides the earlier stacked layout without disturbing
-# the capture, chart, and replacement-session styling introduced by #7 and #8.
+# The workbench layout overrides earlier shared component styling without
+# disturbing the capture, chart, and replacement-session presentation.
 APP_CSS += """
 .gradio-container {
-    height: 100vh !important;
-    min-height: 0 !important;
+    height: max(100vh, var(--ct-workbench-min-height)) !important;
+    min-height: var(--ct-workbench-min-height) !important;
+    min-width: var(--ct-workbench-min-width) !important;
     overflow: hidden !important;
 }
 .gradio-container .main.fillable {
@@ -675,7 +646,8 @@ APP_CSS += """
     width: 100% !important;
 }
 .gradio-container main.contain {
-    max-width: 1440px !important;
+    max-width: none !important;
+    min-width: var(--ct-workbench-min-width) !important;
     padding: 0 !important;
     width: 100% !important;
 }
@@ -686,8 +658,10 @@ APP_CSS += """
     display: flex !important;
     flex-direction: column !important;
     gap: 0.65rem !important;
-    height: 100vh !important;
-    max-width: 1440px !important;
+    height: max(100vh, var(--ct-workbench-min-height)) !important;
+    max-width: none !important;
+    min-height: var(--ct-workbench-min-height) !important;
+    min-width: var(--ct-workbench-min-width) !important;
     overflow: hidden !important;
     padding: 0.65rem 0.8rem !important;
     width: 100% !important;
@@ -763,6 +737,7 @@ APP_CSS += """
 }
 .ct-diagram {
     height: 7.55rem;
+    margin: 0 auto;
     min-width: 1300px;
     position: relative;
     width: 1300px;
@@ -820,8 +795,9 @@ APP_CSS += """
     outline-offset: 1px;
 }
 .ct-stage:disabled {
+    color: #64748b;
     cursor: default;
-    opacity: 0.64;
+    opacity: 0.72;
 }
 .ct-stage.ct-selected {
     background: #ffffff;
@@ -928,9 +904,9 @@ APP_CSS += """
     flex-wrap: nowrap !important;
 }
 .ct-location-panel {
-    flex: 0 0 14.5rem !important;
-    max-width: 14.5rem !important;
-    min-width: 14.5rem !important;
+    flex: 0 0 15.5rem !important;
+    max-width: 15.5rem !important;
+    min-width: 15.5rem !important;
     overflow: hidden !important;
     padding: 0.7rem !important;
 }
@@ -981,8 +957,9 @@ APP_CSS += """
     outline: none;
 }
 .ct-location-button:disabled {
+    color: #64748b;
     cursor: default;
-    opacity: 0.48;
+    opacity: 0.6;
 }
 .ct-location-button.ct-selected {
     border-color: #111827;
@@ -1114,9 +1091,9 @@ APP_CSS += """
     overscroll-behavior: contain;
 }
 .ct-metadata-panel {
-    flex: 0 0 18rem !important;
-    max-width: 18rem !important;
-    min-width: 18rem !important;
+    flex: 0 0 20rem !important;
+    max-width: 20rem !important;
+    min-width: 20rem !important;
     overflow-y: auto !important;
     padding: 0.7rem !important;
 }
@@ -1139,17 +1116,9 @@ APP_CSS += """
     font-size: 0.72rem !important;
 }
 .ct-panel-toggle { display: block !important; }
-body.ct-nav-collapsed #ct-location-panel,
-body.ct-inspector-collapsed #ct-metadata-panel {
-    display: none !important;
-}
 .ct-location-panel.ct-force-closed,
 .ct-metadata-panel.ct-force-closed {
     display: none !important;
-}
-.ct-location-panel.ct-force-open,
-.ct-metadata-panel.ct-force-open {
-    display: flex !important;
 }
 body.ct-visual-expanded #ct-visual-panel {
     display: flex !important;
@@ -1177,101 +1146,82 @@ body.ct-visual-expanded #ct-visual-panel .ct-canvas-scroll {
     display: block !important;
 }
 
-@media (max-width: 1280px) and (min-width: 761px) {
-    #ct-metadata-panel { display: none !important; }
-    body.ct-inspector-open #ct-metadata-panel {
-        background: #ffffff;
-        bottom: 0.75rem;
-        box-shadow: 0 12px 40px rgba(15, 23, 42, 0.2);
-        display: flex !important;
-        position: fixed;
-        right: 0.75rem;
-        top: 12rem;
-        width: 20rem;
-        z-index: 60;
-    }
-    #ct-metadata-panel.ct-force-open {
-        background: #ffffff;
-        bottom: 0.75rem;
-        box-shadow: 0 12px 40px rgba(15, 23, 42, 0.2);
-        display: flex !important;
-        height: auto !important;
-        max-height: calc(100vh - 19rem) !important;
-        min-height: 0 !important;
-        position: fixed;
-        right: 0.75rem;
-        top: 18.25rem;
-        width: 20rem;
-        z-index: 60;
-    }
+/* Activation context bar and clickable token chips */
+.ct-activation-context {
+    flex: 0 0 auto !important;
+    margin: 0 !important;
+    padding: 0 0.2rem 0.4rem !important;
 }
-@media (max-width: 1080px) and (min-width: 761px) {
-    #ct-location-panel { display: none !important; }
-    body.ct-nav-open #ct-location-panel {
-        background: #ffffff;
-        bottom: 0.75rem;
-        box-shadow: 0 12px 40px rgba(15, 23, 42, 0.2);
-        display: flex !important;
-        left: 0.75rem;
-        position: fixed;
-        top: 12rem;
-        width: 15.5rem;
-        z-index: 60;
-    }
-    #ct-location-panel.ct-force-open {
-        background: #ffffff;
-        bottom: 0.75rem;
-        box-shadow: 0 12px 40px rgba(15, 23, 42, 0.2);
-        display: flex !important;
-        height: auto !important;
-        max-height: calc(100vh - 19rem) !important;
-        min-height: 0 !important;
-        left: 0.75rem;
-        position: fixed;
-        top: 18.25rem;
-        width: 15.5rem;
-        z-index: 60;
-    }
-    .ct-header-note { display: none !important; }
+.ct-activation-context .prose {
+    overflow: visible !important;
 }
-@media (max-width: 900px) and (min-width: 761px) {
-    .ct-header-copy .ct-subtitle { display: none !important; }
-    .ct-checkpoint-setup { min-width: 20rem !important; }
-    .ct-model-strip { flex-basis: 9.4rem !important; }
+.ct-context-line {
+    align-items: baseline;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-bottom: 0.4rem;
+    color: #475569;
+    font-size: 0.8rem;
+    line-height: 1.3;
 }
-@media (max-width: 760px) {
-    html,
-    body,
-    .gradio-container {
-        min-height: 100% !important;
-        overflow: auto !important;
-    }
-    .ct-page {
-        height: auto !important;
-        min-height: 100vh !important;
-        overflow: visible !important;
-    }
-    .ct-header,
-    .ct-workbench {
-        flex-direction: column !important;
-        overflow: visible !important;
-    }
-    .ct-checkpoint-setup,
-    .ct-location-panel,
-    .ct-metadata-panel,
-    .ct-center {
-        display: flex !important;
-        flex: 0 0 auto !important;
-        height: auto !important;
-        min-width: 0 !important;
-        width: 100% !important;
-    }
-    .ct-model-strip { flex-basis: 10.4rem !important; }
-    .ct-canvas-scroll { max-height: 70vh !important; }
-    .ct-canvas-toolbar { flex-direction: column !important; }
-    .ct-canvas-toolbar > * { width: 100% !important; }
-    .ct-comparison-row { flex-direction: column !important; }
-    .ct-comparison-row > * { width: 100% !important; }
+.ct-context-label {
+    color: #6b7280;
+    font: 700 0.62rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.ct-context-tensor {
+    color: #111827;
+    font-weight: 650;
+}
+.ct-context-shape {
+    color: #1f2937;
+    font: 600 0.8rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.ct-context-sep {
+    color: #9ca3af;
+}
+.ct-token-chips {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+.ct-token-chip {
+    appearance: none;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    color: #1f2937;
+    cursor: pointer;
+    font: 600 0.78rem/1 ui-sans-serif, system-ui, sans-serif;
+    padding: 0.28rem 0.6rem;
+    white-space: nowrap;
+}
+.ct-token-chip:hover:not(:disabled),
+.ct-token-chip:focus-visible {
+    background: #f8fafc;
+    border-color: #64748b;
+    outline: 2px solid #94a3b8;
+    outline-offset: 1px;
+}
+.ct-token-chip:disabled {
+    cursor: default;
+    opacity: 0.55;
+}
+.ct-token-chip.ct-selected {
+    background: #111827;
+    border-color: #111827;
+    color: #ffffff;
+    padding: 0.27rem 0.59rem;
+}
+.ct-token-chip.ct-selected:hover:not(:disabled),
+.ct-token-chip.ct-selected:focus-visible {
+    background: #1f2937;
+    border-color: #111827;
+    color: #ffffff;
+    outline-color: #94a3b8;
 }
 """
 
@@ -1699,6 +1649,53 @@ def _token_choices(analysis: PromptAnalysis) -> list:
     ]
 
 
+def render_token_context_html(tokens, token_positions: list[int], spec_label: str, shape) -> str:
+    """Render the activation context bar: the current tensor/shape plus one
+    clickable chip per prompt token. Selection state is server-authoritative;
+    the diagram/location pipeline re-renders this bar on every change."""
+    selected = set(_selected_positions(token_positions, len(tokens)))
+    token_count = len(tokens)
+    rows, width = int(shape[0]), int(shape[1])
+    shape_text = f"{rows} \u00d7 {width}"
+    if token_count == 0:
+        return ""
+    chips = []
+    for token in tokens:
+        position = int(token.position)
+        classes = ["ct-token-chip"]
+        if position in selected:
+            classes.append("ct-selected")
+        chips.append(
+            '<button type="button" class="{}" data-token-position="{}" '
+            'aria-pressed="{}" title="{}">{}</button>'.format(
+                " ".join(classes),
+                position,
+                "true" if position in selected else "false",
+                html.escape(f"{position}: {token.text}"),
+                html.escape(token.text),
+            )
+        )
+    selected_hint = (
+        "No token selected \u2014 click a token chip or a heatmap cell."
+        if not selected
+        else f"{len(selected)} token{'s' if len(selected) != 1 else ''} selected."
+    )
+    return (
+        '<div class="ct-context-line">'
+        f'<span class="ct-context-label">Tensor</span>'
+        f'<span class="ct-context-tensor">{html.escape(spec_label)}</span>'
+        f'<span class="ct-context-sep">\u00b7</span>'
+        f'<span class="ct-context-label">Shape</span>'
+        f'<span class="ct-context-shape">{shape_text}</span>'
+        f'<span class="ct-context-sep">\u00b7</span>'
+        f'<span class="ct-context-selection">{selected_hint}</span>'
+        '</div>'
+        '<div class="ct-token-chips" role="group" aria-label="Prompt tokens">'
+        f'{"".join(chips)}'
+        "</div>"
+    )
+
+
 def _selected_positions(token_value, token_count: int) -> list[int]:
     if token_value is None or token_value == "":
         return []
@@ -2048,20 +2045,6 @@ CLICK_BRIDGE_JS = """
     bindOverlayButton('ct-close-visuals', () => {
       document.body.classList.remove('ct-visual-expanded');
     });
-    bindOverlayButton('ct-toggle-nav', () => {
-      if (window.matchMedia('(max-width: 1080px)').matches) {
-        document.body.classList.toggle('ct-nav-open');
-      } else {
-        document.body.classList.toggle('ct-nav-collapsed');
-      }
-    });
-    bindOverlayButton('ct-toggle-inspector', () => {
-      if (window.matchMedia('(max-width: 1280px)').matches) {
-        document.body.classList.toggle('ct-inspector-open');
-      } else {
-        document.body.classList.toggle('ct-inspector-collapsed');
-      }
-    });
   };
   const syncLocationIndicators = () => {
     const diagram = document.querySelector('.ct-diagram');
@@ -2111,15 +2094,22 @@ CLICK_BRIDGE_JS = """
         publish({view, token_position: tokenPosition, dimension});
       }
     });
+    const chipsHost = document.getElementById('ct-activation-context');
+    if (chipsHost && chipsHost.dataset.chipBridgeInstalled !== 'true') {
+      chipsHost.dataset.chipBridgeInstalled = 'true';
+      chipsHost.addEventListener('click', (event) => {
+        const chip = event.target?.closest?.('.ct-token-chip');
+        if (!chip || chip.disabled) return;
+        const position = Number(chip.dataset.tokenPosition);
+        if (!Number.isInteger(position)) return;
+        event.preventDefault();
+        publish({view: 'overview', token_position: position});
+      });
+    }
   };
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
-    document.body.classList.remove(
-      'ct-visual-expanded', 'ct-nav-open', 'ct-inspector-open'
-    );
-    document.querySelectorAll('.ct-force-open').forEach((panel) => {
-      panel.classList.remove('ct-force-open');
-    });
+    document.body.classList.remove('ct-visual-expanded');
     document.querySelector('.ct-center')?.classList.remove('ct-visual-expanded');
   });
   install();
@@ -2148,10 +2138,8 @@ watch('value', bindLocationButtons);
 
 NAV_TOGGLE_JS = """
 () => {
-  const narrow = window.matchMedia('(max-width: 1080px)').matches;
   document.querySelectorAll('#ct-location-panel').forEach((panel) => {
-    panel.classList.toggle('ct-force-open', narrow && !panel.classList.contains('ct-force-open'));
-    panel.classList.toggle('ct-force-closed', !narrow && !panel.classList.contains('ct-force-closed'));
+    panel.classList.toggle('ct-force-closed');
   });
   return [];
 }
@@ -2159,10 +2147,8 @@ NAV_TOGGLE_JS = """
 
 INSPECTOR_TOGGLE_JS = """
 () => {
-  const narrow = window.matchMedia('(max-width: 1280px)').matches;
   document.querySelectorAll('#ct-metadata-panel').forEach((panel) => {
-    panel.classList.toggle('ct-force-open', narrow && !panel.classList.contains('ct-force-open'));
-    panel.classList.toggle('ct-force-closed', !narrow && !panel.classList.contains('ct-force-closed'));
+    panel.classList.toggle('ct-force-closed');
   });
   return [];
 }
@@ -2898,6 +2884,9 @@ def _successful_inspection_outputs(
     )
     values = analysis.capture.locations[spec.key]
     labels = [f"{token.position}: {token.text}" for token in analysis.tokens]
+    activation_context = render_token_context_html(
+        analysis.tokens, token_positions, spec.label, values.shape
+    )
     measurement_identity = (
         (measurement.token_position, measurement.dimension) if measurement else None
     )
@@ -2948,6 +2937,7 @@ def _successful_inspection_outputs(
             gr.update(value=None, visible=False),
             gr.update(value=None, visible=False),
             comparison_status,
+            activation_context,
         )
 
     spec_a = location_spec(active_comparison.location_key)
@@ -3032,6 +3022,7 @@ def _successful_inspection_outputs(
         gr.update(value=figure_b, visible=True),
         gr.update(value=delta_figure, visible=delta_figure is not None),
         comparison_status,
+        activation_context,
     )
 
 
@@ -3045,6 +3036,19 @@ def _render_activation_view(
     location_label: str,
     measurement_pin,
 ):
+    if mode == "square":
+        positions = token_positions or list(range(values.shape[0]))
+        return render_activation_detail(
+            values,
+            labels,
+            positions,
+            mode=mode,
+            clipped=clipped,
+            bounds=bounds,
+            measurement_pin=measurement_pin,
+            location_label=location_label,
+            cell_view="detail" if token_positions else "overview",
+        )
     if token_positions:
         return render_activation_detail(
             values,
@@ -3713,7 +3717,7 @@ def analyze_and_inspect_callback(prompt, manager: ModelManager, progress=None):
         ),
         gr.update(value="square"),
         False,
-        *inspection[2:],
+        *inspection[2:-1],
         diagnostics,
         "",
     )
@@ -3746,8 +3750,9 @@ def select_location_callback(
             gr.update(value=None, visible=False),
             gr.update(value=None, visible=False),
             "No comparison pinned.",
+            "",
         )
-        return outputs if manager.is_current_generation(generation) else _skip_outputs(12)
+        return outputs if manager.is_current_generation(generation) else _skip_outputs(13)
 
     analysis = session.analysis
     positions = _selected_positions(token_value, analysis.token_count)
@@ -3767,8 +3772,8 @@ def select_location_callback(
         measurement_message,
     )[1:])
     if comparison_cleared:
-        outputs[-1] = "Comparison ended: A was selected again."
-    return tuple(outputs) if manager.is_current_session(session) else _skip_outputs(12)
+        outputs[-2] = "Comparison ended: A was selected again."
+    return tuple(outputs) if manager.is_current_session(session) else _skip_outputs(13)
 
 
 def select_bridged_location_callback(
@@ -3782,11 +3787,11 @@ def select_bridged_location_callback(
     """Resolve a diagram or navigator click through the structured JS bridge."""
     _, session, _, _, _ = manager.state_snapshot()
     if session is None:
-        return _skip_outputs(13)
+        return _skip_outputs(14)
     try:
         location_spec(location_key)
     except Exception:
-        return _skip_outputs(13)
+        return _skip_outputs(14)
     comparison_cleared = manager.navigate_comparison(location_key, explicit=True)
     _, session, comparison, _, _ = manager.state_snapshot()
     measurement, measurement_message = manager.resolve_measurement_pin(
@@ -3806,8 +3811,8 @@ def select_bridged_location_callback(
         measurement_message,
     ))
     if comparison_cleared:
-        outputs[-1] = "Comparison ended: A was selected again."
-    return tuple(outputs) if manager.is_current_session(session) else _skip_outputs(13)
+        outputs[-2] = "Comparison ended: A was selected again."
+    return tuple(outputs) if manager.is_current_session(session) else _skip_outputs(14)
 
 
 def select_clicked_token_callback(
@@ -3835,8 +3840,9 @@ def select_clicked_token_callback(
             gr.update(value=None, visible=False),
             gr.update(value=None, visible=False),
             "No comparison pinned.",
+            "",
         )
-        return outputs if manager.is_current_generation(generation) else _skip_outputs(12)
+        return outputs if manager.is_current_generation(generation) else _skip_outputs(13)
     click = _parse_activation_click(clicked_position)
     location = location_key or DEFAULT_LOCATION_KEY
     positions = _selected_positions(token_value, session.analysis.token_count)
@@ -3873,7 +3879,7 @@ def select_clicked_token_callback(
         measurement,
         measurement_message,
     )
-    return outputs[1:] if manager.is_current_session(session) else _skip_outputs(12)
+    return outputs[1:] if manager.is_current_session(session) else _skip_outputs(13)
 
 
 def _parse_activation_click(value) -> Optional[dict]:
@@ -3976,7 +3982,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
             isinstance(outputs[0], str)
             and outputs[0] == "Model loaded successfully."
         ):
-            return (*outputs, *_skip_outputs(6))
+            return (*outputs, *_skip_outputs(7))
         state = manager.loaded_state
         return (
             *outputs,
@@ -3984,6 +3990,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
             gr.update(open=False),
             gr.update(visible=True),
             gr.update(visible=False),
+            gr.update(value=""),
             gr.update(value=""),
             gr.update(value=""),
         )
@@ -3994,20 +4001,28 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
             isinstance(outputs[0], str)
             and outputs[0].startswith("Analysis complete")
         ):
-            return (*outputs, *_skip_outputs(4))
+            return (*outputs, *_skip_outputs(5))
         session = manager.inspection_session
         comparison = manager.comparison_state
+        analysis = session.analysis
+        default_values = analysis.capture.locations[DEFAULT_LOCATION_KEY]
         return (
             *outputs,
             render_location_navigator(
                 session.config,
-                session.analysis.token_count,
+                analysis.token_count,
                 DEFAULT_LOCATION_KEY,
                 comparison.location_key if comparison else None,
             ),
             gr.update(visible=False),
             gr.update(visible=True),
             gr.update(value=prompt),
+            render_token_context_html(
+                analysis.tokens,
+                [],
+                location_spec(DEFAULT_LOCATION_KEY).label,
+                default_values.shape,
+            ),
         )
 
     def pin_ui(location, token, clipped, normalization, mode):
@@ -4016,7 +4031,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
         )
         session = manager.inspection_session
         if session is None:
-            return (*_skip_outputs(12), diagnostics)
+            return (*_skip_outputs(13), diagnostics)
         measurement, measurement_message = manager.resolve_measurement_pin(
             location or DEFAULT_LOCATION_KEY, expected_session=session
         )
@@ -4037,7 +4052,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
         _, diagnostics = clear_comparison_callback(manager)
         session = manager.inspection_session
         if session is None:
-            return (*_skip_outputs(12), diagnostics)
+            return (*_skip_outputs(13), diagnostics)
         measurement, measurement_message = manager.resolve_measurement_pin(
             location or DEFAULT_LOCATION_KEY, expected_session=session
         )
@@ -4052,7 +4067,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
             measurement_message=measurement_message,
         )
         inspection = list(inspection[1:])
-        inspection[-1] = "Comparison A unpinned."
+        inspection[-2] = "Comparison A unpinned."
         return (*inspection, diagnostics)
 
     def navigate_ui(token, clipped, normalization, mode, evt: gr.EventData):
@@ -4084,6 +4099,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
                     with gr.Row(elem_classes="ct-checkpoint-row"):
                         checkpoint_folder = gr.Textbox(
                             label="Checkpoint folder (server path)",
+                            value=DEFAULT_CHECKPOINT_DIRECTORY,
                             placeholder="C:\\...\\checkpoint-v2",
                         )
                         load_button = gr.Button("Load model", variant="primary")
@@ -4167,10 +4183,10 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
                         mode_dropdown = gr.Dropdown(
                             choices=[("Square", "square"), ("Indexed", "indexed")],
                             value="square",
-                            label="Detail mode",
+                            label="Activation layout",
                             info=(
-                                "Square uses artificial 2D adjacency. In detail, "
-                                "click a cell to pin its token/dimension."
+                                "Square maps each token into an artificial 2D grid. "
+                                "Select a token, then click a cell to pin its dimension."
                             ),
                             interactive=True,
                         )
@@ -4202,6 +4218,11 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
                             "Close expanded view",
                             elem_id="ct-close-visuals",
                             elem_classes="ct-close-button",
+                        )
+                        activation_context = gr.HTML(
+                            value="",
+                            elem_id="ct-activation-context",
+                            elem_classes="ct-activation-context",
                         )
                         with gr.Group(elem_classes="ct-chart-main ct-canvas-scroll"):
                             heatmap_plot = gr.Plot(
@@ -4336,6 +4357,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
                     comparison_status, diagnostics, token_click,
                     location_navigator, checkpoint_setup, prompt_editor,
                     prompt_context, analyzed_prompt, prompt_text,
+                    activation_context,
                 ],
                 show_progress="full",
             )
@@ -4371,6 +4393,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
                     prompt_editor,
                     prompt_context,
                     analyzed_prompt,
+                    activation_context,
                 ],
                 show_progress="full",
             )
@@ -4387,6 +4410,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
                 comparison_b_plot,
                 delta_plot,
                 comparison_status,
+                activation_context,
             ]
             for location_surface in (diagram, location_navigator):
                 location_surface.click(

@@ -82,15 +82,16 @@ validates all three files before showing the model details, reports CUDA GPU or
 CPU based on TensorFlow's actual device visibility, and keeps the Gradio server
 bound to localhost with public sharing disabled.
 
-The desktop workbench is designed and checked at `1440x900`: the exact model
-topology stays across the top, captured locations are grouped on the left, the
-activation canvas occupies the center, and tensor metadata stays in the right
-inspector. The page itself does not scroll at this size. Analytical context and
-controls remain fixed while a long token-by-dimension heatmap scrolls inside its
-canvas. Below 1280px the metadata inspector collapses first; below 1080px the
-location navigator also collapses. The **Locations** and **Metadata** buttons
-open either panel when it has been hidden by a breakpoint, and `Escape` closes
-temporary panels or an expanded canvas.
+The desktop workbench requires a browser viewport of at least `1920x1080` CSS
+pixels. The exact model topology stays across the top, captured locations are
+grouped on the left, the activation canvas occupies the flexible center, and
+tensor metadata stays in the right inspector. The workbench fills wider and
+taller viewports while its side panels remain stable. The page itself does not
+scroll at supported sizes; analytical context and controls remain fixed while a
+long token-by-dimension heatmap scrolls inside its canvas. Smaller viewports are
+unsupported and may overflow rather than switching to a compact layout. The
+**Locations** and **Metadata** buttons manually collapse or restore their
+panels, and `Escape` closes an expanded canvas.
 
 Checkpoint setup starts open and collapses after a successful load. A failed
 load leaves it open and preserves the current research session. After a
@@ -161,15 +162,17 @@ mode.
 
 After a successful analysis, the **Internal location** selector opens at the
 **Final block output** with no token positions selected. The initial activation
-field is one rectangular overview: every processed token is a row and every
-source dimension is a column, with no reshaping or padding. Hover shows the
-token position, token text, dimension index, and unrounded raw activation value.
-Long captures retain a legible row height and scroll vertically through the
-workspace, including the model maximum of 80 tokens.
+field uses the default **Square** layout, with one row-major grid per processed
+token. A 256-dimensional tensor is shown as an exact `16x16` grid; other widths
+use the smallest square that preserves every source dimension, with unused
+cells shown as non-data padding. Hover shows the token position, token text,
+dimension index, and unrounded raw activation value. Long captures scroll
+vertically inside the workspace, including the model maximum of 80 tokens.
 
-Click any overview cell to toggle its entire token row; no Ctrl, Shift, or other
-modifier is required. The first selected row opens token detail automatically,
-and clearing the final token in **Token positions** returns to the overview.
+Click any cell inside a token's overview grid to select or toggle that token; no
+Ctrl, Shift, or other modifier is required. The first selected token opens token
+detail automatically, and clearing the final token in **Token positions**
+returns to the all-token Square overview.
 Selections are identities by 0-based token position, so repeated token text is
 unambiguous and the same positions stay selected while navigating locations.
 Black outlines indicate selected structure without introducing another data
@@ -194,12 +197,12 @@ available and the app reports their exact shapes and why delta is disabled.
 Subtraction never broadcasts, truncates, projects, pads, or otherwise coerces
 incompatible tensors.
 
-**Square** is the default detail mode. It keeps dimensions in source order in a
-near-square row-major map, shows unused cells in gray as non-data padding, and
-explicitly warns that two-dimensional adjacency is artificial. **Indexed**
-shows one unpadded row per selected token with dimensions in literal increasing
-order. Both modes hover the exact stored raw value rather than a rounded chart
-value.
+**Square** is the default activation layout for both the all-token overview and
+selected-token detail. It keeps dimensions in source order, shows unused cells
+in gray as non-data padding, and explicitly warns that two-dimensional adjacency
+is artificial. **Indexed** shows the unpadded all-token matrix when no tokens are
+selected and one literal dimension row per selected token. Both layouts hover
+the exact stored raw value rather than a rounded chart value.
 
 Click a detail cell to pin one exact `(token position, dimension)` measurement;
 clicking another detail cell replaces it. The black cell outline and metadata
