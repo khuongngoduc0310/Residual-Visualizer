@@ -6,6 +6,7 @@ from charts import (
     grid_shape,
     render_entropy_strip,
     render_pattern_heatmap,
+    render_readout_delta,
     render_readout_topk,
     render_token_map_row,
 )
@@ -85,6 +86,38 @@ def test_all_chart_renderers_return_plotly_figures():
     ]
     assert isinstance(render_readout_topk(rows, "0: x"), go.Figure)
     assert isinstance(
+        render_readout_delta(
+            [
+                {
+                    "text": "a",
+                    "token_id": 2,
+                    "baseline_probability": 0.8,
+                    "ablated_probability": 0.2,
+                    "delta": -0.6,
+                }
+            ],
+            "0: x",
+        ),
+        go.Figure,
+    )
+    assert isinstance(
         render_entropy_strip(LABELS, np.array([0.2, 0.4, 0.1]), 1),
         go.Figure,
     )
+
+
+def test_pattern_renderer_accepts_signed_difference_bounds():
+    figure = render_pattern_heatmap(
+        np.array([[0.0, -0.2], [0.1, 0.0]]),
+        ["0: x", "1: y"],
+        1,
+        bounds=(-0.2, 0.2),
+        colorscale="RdBu",
+        value_label="delta",
+        title="Pattern difference",
+    )
+
+    assert figure.data[0].zmin == -0.2
+    assert figure.data[0].zmax == 0.2
+    assert figure.data[0].colorbar.title.text == "delta"
+    assert figure.layout.title.text == "Pattern difference"

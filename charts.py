@@ -151,6 +151,10 @@ def render_pattern_heatmap(
     scores: np.ndarray,
     token_labels: Sequence[str],
     selected_query: int,
+    bounds: Tuple[float, float] = (0.0, 1.0),
+    colorscale: str = "Blues",
+    value_label: str = "weight",
+    title: str = "Causal attention pattern (mean over heads)",
 ) -> go.Figure:
     """Attention pattern: rows are query tokens, columns are key tokens."""
     matrix = _as_matrix(scores)
@@ -162,15 +166,15 @@ def render_pattern_heatmap(
             z=matrix,
             x=np.arange(matrix.shape[1]),
             y=np.arange(matrix.shape[0]),
-            zmin=0.0,
-            zmax=1.0,
-            colorscale="Blues",
-            colorbar=dict(title="weight"),
+            zmin=bounds[0],
+            zmax=bounds[1],
+            colorscale=colorscale,
+            colorbar=dict(title=value_label),
             customdata=np.broadcast_to(
                 np.arange(matrix.shape[0])[:, None], matrix.shape
             ),
             hovertemplate=(
-                "query %{y}<br>key %{x}<br>weight %{z:.4f}"
+                f"query %{{y}}<br>key %{{x}}<br>{value_label} %{{z:.4f}}"
                 "<extra></extra>"
             ),
         )
@@ -188,7 +192,7 @@ def render_pattern_heatmap(
             fillcolor="rgba(0,0,0,0)",
         )
     figure.update_layout(
-        title="Causal attention pattern (mean over heads)",
+        title=title,
         xaxis_title="Key position",
         yaxis_title="Query position",
         yaxis=dict(autorange="reversed"),
@@ -249,5 +253,51 @@ def render_entropy_strip(
         yaxis_title="Entropy (nats)",
         template="plotly_white",
         margin=dict(l=55, r=20, t=55, b=90),
+    )
+    return figure
+
+
+def render_readout_delta(
+    rows: Sequence[dict],
+    token_label: str,
+    highlighted_token_id: int | None = None,
+) -> go.Figure:
+    """Show the largest ablated-minus-baseline probability movements."""
+    if not rows:
+        raise ValueError("readout delta rows must not be empty")
+
+    texts = [row["text"] for row in rows]
+    deltas = [float(row["delta"]) for row in rows]
+    colors = []
+    for row, delta in zip(rows, deltas):
+        if highlighted_token_id is not None and row["token_id"] == highlighted_token_id:
+            colors.append("#d97706")
+        else:
+            colors.append("#dc2626" if delta < 0.0 else "#2563eb")
+    customdata = [
+        [float(row["baseline_probability"]), float(row["ablated_probability"])]
+        for row in rows
+    ]
+    figure = go.Figure(
+        go.Bar(
+            x=deltas,
+            y=texts,
+            orientation="h",
+            marker_color=colors,
+            customdata=customdata,
+            hovertemplate=(
+                "%{y}<br>baseline: %{customdata[0]:.6f}"
+                "<br>ablated: %{customdata[1]:.6f}"
+                "<br>delta: %{x:.6f}<extra></extra>"
+            ),
+        )
+    )
+    figure.update_layout(
+        title=f"Ablation effect on next-token probabilities for {token_label}",
+        xaxis_title="Ablated - baseline probability",
+        yaxis_title="Token",
+        yaxis=dict(autorange="reversed"),
+        template="plotly_white",
+        margin=dict(l=90, r=35, t=75, b=55),
     )
     return figure

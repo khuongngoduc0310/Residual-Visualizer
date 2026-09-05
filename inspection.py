@@ -196,6 +196,17 @@ SPINE_STATES: Tuple[str, ...] = (
     "output_norm",
 )
 
+ABLATABLE_NODES: Tuple[str, ...] = (
+    "embedding",
+    "attention_residual",
+    "attention_norm",
+    "ffn_hidden",
+    "ffn_residual",
+    "output_norm",
+)
+ABLATION_MODES: Tuple[str, ...] = ("zero", "mean")
+ABLATION_SCOPES: Tuple[str, ...] = ("token", "all")
+
 # Describes the connector between successive spine states and where it starts
 # from line value (used for the branch wiring too).
 @dataclass(frozen=True)
@@ -255,6 +266,54 @@ class CapturedRun:
     token_count: int
 
 
+class AblationError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class AblationSpec:
+    node_key: str
+    dim: int
+    mode: str
+    scope: str
+    position: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.node_key not in ABLATABLE_NODES:
+            raise AblationError(
+                f"Node cannot be ablated: {self.node_key}"
+            )
+        if isinstance(self.dim, bool) or not isinstance(self.dim, int):
+            raise AblationError("Ablation dimension must be an integer")
+        if self.dim < 0:
+            raise AblationError("Ablation dimension must be non-negative")
+        if self.mode not in ABLATION_MODES:
+            raise AblationError(
+                f"Ablation mode must be one of: {', '.join(ABLATION_MODES)}"
+            )
+        if self.scope not in ABLATION_SCOPES:
+            raise AblationError(
+                f"Ablation scope must be one of: {', '.join(ABLATION_SCOPES)}"
+            )
+        if self.scope == "token":
+            if self.position is None:
+                raise AblationError(
+                    "A token-scoped ablation requires a token position"
+                )
+            if (
+                isinstance(self.position, bool)
+                or not isinstance(self.position, int)
+                or self.position < 0
+            ):
+                raise AblationError(
+                    "Ablation token position must be a non-negative integer"
+                )
+        elif self.position is not None:
+            raise AblationError(
+                "An all-token ablation must not include a token position"
+            )
+
+
 def node_spec(key: str) -> StreamNode:
     try:
         return NODE_BY_KEY[key]
@@ -262,11 +321,137 @@ def node_spec(key: str) -> StreamNode:
         raise InspectionError(f"Unknown stream node: {key}") from None
 
 
+def node_width(node_key: str, config) -> int:
+    if node_key not in ABLATABLE_NODES:
+        raise AblationError(f"Node cannot be ablated: {node_key}")
+    return (
+        config.feed_forward_dim
+        if node_key == "ffn_hidden"
+        else config.embedding_dim
+    )
+
+
+def ablation_node_options(config) -> list[dict]:
+    return [
+        {
+            "key": key,
+            "label": node_spec(key).label,
+            "kind": node_spec(key).kind,
+            "width": node_width(key, config),
+        }
+        for key in ABLATABLE_NODES
+    ]
+
+
+def _validate_ablation(
+    checkpoint: LoadedCheckpoint,
+    ablation: AblationSpec,
+    token_count: int,
+) -> None:
+    width = node_width(ablation.node_key, checkpoint.config)
+    if ablation.dim >= width:
+        raise AblationError(
+            f"Ablation dimension {ablation.dim} is outside the width of "
+            f"{ablation.node_key} ({width})"
+        )
+    if ablation.scope == "token":
+        if ablation.position >= token_count:
+            raise AblationError(
+                f"Ablation token position {ablation.position} is outside "
+                f"the prompt ({token_count} token(s))"
+            )
+        if ablation.mode == "mean" and token_count == 1:
+            raise AblationError(
+                "Mean ablation at one token requires another token for its "
+                "leave-one-out baseline"
+            )
+
+
+def ablation_replacement_value(
+    values: np.ndarray,
+    ablation: AblationSpec,
+) -> float:
+    matrix = np.asarray(values)
+    if matrix.ndim != 2:
+        raise AblationError("Ablation values must be two-dimensional")
+    if ablation.dim >= matrix.shape[1]:
+        raise AblationError(
+            f"Ablation dimension {ablation.dim} is outside the tensor width "
+            f"({matrix.shape[1]})"
+        )
+    if ablation.mode == "zero":
+        return 0.0
+    column = matrix[:, ablation.dim]
+    if ablation.scope == "all":
+        return float(np.mean(column))
+    if ablation.position >= matrix.shape[0]:
+        raise AblationError(
+            f"Ablation token position {ablation.position} is outside the "
+            f"tensor ({matrix.shape[0]} token(s))"
+        )
+    remaining = np.delete(column, ablation.position)
+    if remaining.size == 0:
+        raise AblationError(
+            "Mean ablation at one token requires another token for its "
+            "leave-one-out baseline"
+        )
+    return float(np.mean(remaining))
+
+
+def _apply_ablation(
+    tensor: tf.Tensor,
+    ablation: AblationSpec,
+    token_count: int,
+) -> tf.Tensor:
+    matrix = tf.squeeze(tensor, axis=0)
+    column = matrix[:, ablation.dim]
+    if ablation.mode == "zero":
+        replacement = tf.zeros_like(column)
+    elif ablation.scope == "all":
+        replacement = tf.fill(
+            [token_count],
+            tf.reduce_mean(column),
+        )
+    else:
+        row_mask = tf.equal(
+            tf.range(token_count),
+            tf.cast(ablation.position, tf.int32),
+        )
+        remaining = tf.boolean_mask(column, tf.logical_not(row_mask))
+        replacement_value = tf.reduce_mean(remaining)
+        replacement = tf.fill([token_count], replacement_value)
+
+    if ablation.scope == "all":
+        row_mask = tf.ones([token_count], dtype=tf.bool)
+    else:
+        row_mask = tf.equal(
+            tf.range(token_count),
+            tf.cast(ablation.position, tf.int32),
+        )
+    column_mask = tf.equal(
+        tf.range(tf.shape(matrix)[1]),
+        tf.cast(ablation.dim, tf.int32),
+    )
+    cell_mask = tf.logical_and(row_mask[:, None], column_mask[None, :])
+    replacement_matrix = tf.broadcast_to(
+        replacement[:, None],
+        tf.shape(matrix),
+    )
+    return tf.expand_dims(
+        tf.where(cell_mask, replacement_matrix, matrix),
+        axis=0,
+    )
+
+
 def family_keys(family: str) -> Tuple[str, ...]:
     return FAMILY_NODES.get(family, (key for key in ()))
 
 
-def capture_locations(checkpoint: LoadedCheckpoint, token_ids) -> CapturedRun:
+def capture_locations(
+    checkpoint: LoadedCheckpoint,
+    token_ids,
+    ablation: AblationSpec | None = None,
+) -> CapturedRun:
     """Run the loaded model once and return every internal tensor as a
     [sequence, width] NumPy array, all with dropout disabled. The attention
     pattern is stored as a [sequence, sequence] mean over heads."""
@@ -285,6 +470,10 @@ def capture_locations(checkpoint: LoadedCheckpoint, token_ids) -> CapturedRun:
             f"Prompt has {token_count} tokens; the model accepts at most "
             f"{checkpoint.config.max_len}."
         )
+    if ablation is not None:
+        if not isinstance(ablation, AblationSpec):
+            raise TypeError("ablation must be an AblationSpec")
+        _validate_ablation(checkpoint, ablation, token_count)
 
     token_ids = ids[None, :]
     model = checkpoint.model
@@ -293,9 +482,25 @@ def capture_locations(checkpoint: LoadedCheckpoint, token_ids) -> CapturedRun:
     positions = tf.range(token_count)[None, :]
     position_embeddings = embedding_layer.pos_emb(positions)
     embeddings = token_embeddings + position_embeddings
+    interventions = None
+    if ablation is not None:
+        if ablation.node_key == "embedding":
+            embeddings = _apply_ablation(embeddings, ablation, token_count)
+        else:
+            interventions = {
+                ablation.node_key: lambda tensor: _apply_ablation(
+                    tensor,
+                    ablation,
+                    token_count,
+                )
+            }
     steps, attention_scores = model.get_layer(
         "transformer_block"
-    ).call_steps(embeddings, training=False)
+    ).call_steps(
+        embeddings,
+        training=False,
+        interventions=interventions,
+    )
     block_output = steps["output_norm"]
     probabilities = model.get_layer("token_probabilities")(block_output)
 

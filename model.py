@@ -1,6 +1,6 @@
 import math
 from dataclasses import asdict, dataclass, fields
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Mapping
 
 import tensorflow as tf
 from tensorflow.keras import layers, losses, models
@@ -133,9 +133,27 @@ class TransformerBlock(layers.Layer):
         steps, attention_scores = self.call_steps(inputs, training)
         return steps["output_norm"], attention_scores
 
-    def call_steps(self, inputs, training=None):
+    def call_steps(
+        self,
+        inputs,
+        training=None,
+        interventions: Mapping[str, Callable[[tf.Tensor], tf.Tensor]] | None = None,
+    ):
         """Run every stage, returning each intermediate named after its
-        diagram stage plus the attention scores."""
+        diagram stage plus the attention scores.
+
+        Interventions are runtime-only hooks used by inspection experiments.
+        Each hook receives a stage tensor and returns its replacement before
+        downstream stages consume it. With no interventions, this follows the
+        normal model path exactly.
+        """
+
+        def apply_intervention(key, value):
+            if interventions is None:
+                return value
+            intervention = interventions.get(key)
+            return value if intervention is None else intervention(value)
+
         input_shape = tf.shape(inputs)
         batch_size = input_shape[0]
         seq_len = input_shape[1]
@@ -154,16 +172,29 @@ class TransformerBlock(layers.Layer):
         )
         attention_update = self.dropout_1(attention_output, training=training)
         attention_residual = inputs + attention_update
+        attention_residual = apply_intervention(
+            "attention_residual", attention_residual
+        )
         normalized_attention = self.ln_1(attention_residual)
+        normalized_attention = apply_intervention(
+            "attention_norm", normalized_attention
+        )
 
         feed_forward_hidden = self.ffn_1(normalized_attention)
+        feed_forward_hidden = apply_intervention(
+            "ffn_hidden", feed_forward_hidden
+        )
         feed_forward_update = self.ffn_2(feed_forward_hidden)
         feed_forward_update = self.dropout_2(
             feed_forward_update,
             training=training,
         )
         feed_forward_residual = normalized_attention + feed_forward_update
+        feed_forward_residual = apply_intervention(
+            "ffn_residual", feed_forward_residual
+        )
         output = self.ln_2(feed_forward_residual)
+        output = apply_intervention("output_norm", output)
         return {
             "attention_update": attention_update,
             "attention_residual": attention_residual,

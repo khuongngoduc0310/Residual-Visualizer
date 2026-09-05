@@ -189,6 +189,33 @@ button {
   line-height: 1.5;
 }
 
+.ct-number-input {
+  width: 108px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 13px;
+  color: var(--ink);
+  background: #ffffff;
+}
+
+.ct-number-input:focus {
+  outline: 2px solid var(--blue-700);
+  outline-offset: -1px;
+}
+
+.ct-input-hint {
+  color: var(--muted-2);
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 6px 0 0;
+}
+
+.ct-panel-copy {
+  line-height: 1.5;
+  margin: 0 0 12px;
+}
+
 .ct-button-row {
   display: flex;
   align-items: center;
@@ -224,6 +251,33 @@ button {
   color: var(--ink-soft);
   padding: 6px 12px;
   font-size: 12px;
+}
+
+.ct-view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel-soft);
+}
+
+.ct-view-button {
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 9px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ct-view-button:last-child {
+  border-right: 0;
+}
+
+.ct-view-button-selected {
+  background: var(--blue-700);
+  color: #ffffff;
 }
 
 .ct-busy {
@@ -568,6 +622,40 @@ button {
   margin-top: 12px;
 }
 
+.ct-ablation-results {
+  margin-top: 14px;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 8px;
+}
+
+.ct-highlight-form {
+  min-width: min(100%, 300px);
+}
+
+.ct-compare-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.ct-compare-columns > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-content: flex-start;
+}
+
+.ct-compare-columns .ct-subheading {
+  width: 100%;
+}
+
+.ct-mover-highlighted td {
+  background: #fff7ed;
+  color: #92400e;
+  font-weight: 600;
+}
+
 .ct-readout-table .ct-table-wrap {
   max-height: 320px;
   overflow: auto;
@@ -598,4 +686,38 @@ button {
   padding: 5px 8px;
   color: var(--ink-soft);
   font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 800px) {
+  .ct-page {
+    padding: 0 14px 28px;
+  }
+
+  .ct-header {
+    gap: 12px;
+    padding-top: 18px;
+  }
+
+  .ct-header-note {
+    display: none;
+  }
+
+  .ct-explorer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ct-rail {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .ct-readout-row,
+  .ct-compare-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ct-panel-head-actions {
+    justify-content: flex-start;
+  }
 }

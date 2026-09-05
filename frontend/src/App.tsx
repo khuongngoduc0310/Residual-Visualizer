@@ -6,9 +6,11 @@ import type { NodeStripItem } from "./components/NodeStrip";
 import { NodeView } from "./components/NodeView";
 import { ResidualGraph } from "./components/ResidualGraph";
 import type {
+  AblationInfo,
   AnalyzePayload,
   GraphNode,
   InspectPayload,
+  InspectView,
   LoadPayload,
   OptionsPayload,
 } from "./types";
@@ -48,6 +50,16 @@ export function App() {
   const [inspectError, setInspectError] = useState<string>("");
   const [nodeKey, setNodeKey] = useState<string | null>(null);
   const [tokenPosition, setTokenPosition] = useState<number | null>(null);
+  const [view, setView] = useState<InspectView>("baseline");
+  const [activeAblation, setActiveAblation] = useState<AblationInfo | null>(null);
+  const [ablationNode, setAblationNode] = useState("ffn_hidden");
+  const [ablationDim, setAblationDim] = useState("0");
+  const [ablationMode, setAblationMode] = useState<"zero" | "mean">("zero");
+  const [ablationScope, setAblationScope] = useState<"token" | "all">("token");
+  const [ablationBusy, setAblationBusy] = useState(false);
+  const [ablationStatus, setAblationStatus] = useState("");
+  const [ablationError, setAblationError] = useState("");
+  const [highlightToken, setHighlightToken] = useState("");
   const [focused, setFocused] = useState(false);
   const [diagramOpen, setDiagramOpen] = useState(false);
 
@@ -95,15 +107,27 @@ export function App() {
     async (
       key: string | null,
       position: number | null,
+      requestedView: InspectView = "baseline",
+      requestedHighlight: string | null = null,
     ): Promise<InspectPayload> => {
       setInspectBusy(true);
       setInspectError("");
       try {
-        const result = await engine.inspectNode(key, position);
+        const result =
+          requestedView === "baseline" && requestedHighlight === null
+            ? await engine.inspectNode(key, position)
+            : await engine.inspectNode(
+                key,
+                position,
+                requestedView,
+                requestedHighlight,
+              );
         setInspectResult(result);
+        setActiveAblation(result.ablation);
         if (result.state === "ready" && result.node) {
           setNodeKey(result.node.key);
           setTokenPosition(result.selected_position);
+          setView(result.view);
         }
         return result;
       } catch (error) {
@@ -128,6 +152,11 @@ export function App() {
       setInspectError("");
       setNodeKey(null);
       setTokenPosition(null);
+      setView("baseline");
+      setActiveAblation(null);
+      setAblationStatus("");
+      setAblationError("");
+      setHighlightToken("");
       if (!result.ok) {
         setLoadError(result.status);
       }
@@ -143,17 +172,24 @@ export function App() {
     setAnalyzeBusy(true);
     setAnalyzeError("");
     setInspectError("");
+    setAblationStatus("");
+    setAblationError("");
     try {
       const result = await engine.analyzePrompt(prompt);
       setAnalysis(result);
       if (result.ok) {
         setNodeKey(null);
         setTokenPosition(null);
-        await runInspect(null, null);
+        setView("baseline");
+        setActiveAblation(null);
+        setHighlightToken("");
+        await runInspect(null, null, "baseline", null);
       } else {
         setInspectResult(null);
         setNodeKey(null);
         setTokenPosition(null);
+        setView("baseline");
+        setActiveAblation(null);
         setAnalyzeError(result.status);
       }
     } catch (error) {
@@ -167,18 +203,120 @@ export function App() {
 
   function handleSelectNode(key: string): void {
     if (key === (nodeKey ?? defaultNodeKey)) return;
-    void runInspect(key, tokenPosition).catch(() => undefined);
+    void runInspect(key, tokenPosition, view, highlightToken || null).catch(
+      () => undefined,
+    );
   }
 
   function handleSelectToken(position: number): void {
     if (position === tokenPosition) return;
-    void runInspect(effectiveKey, position).catch(() => undefined);
+    void runInspect(effectiveKey, position, view, highlightToken || null).catch(
+      () => undefined,
+    );
   }
 
   function handleStep(delta: number): void {
     if (!graphNode) return;
     const target = delta < 0 ? graphNode.prev_key : graphNode.next_key;
-    if (target) void runInspect(target, tokenPosition);
+    if (target) {
+      void runInspect(target, tokenPosition, view, highlightToken || null);
+    }
+  }
+
+  function handleView(nextView: InspectView): void {
+    if (nextView !== "baseline" && !activeAblation) return;
+    setView(nextView);
+    void runInspect(
+      effectiveKey,
+      tokenPosition,
+      nextView,
+      highlightToken || null,
+    ).catch(() => undefined);
+  }
+
+  async function handleAblate(): Promise<void> {
+    const dimension = Number(ablationDim);
+    const width =
+      ablationNode === "ffn_hidden"
+        ? loadResult?.meta.feed_forward_dim
+        : loadResult?.meta.embedding_dim;
+    const validDimension =
+      Number.isInteger(dimension) &&
+      dimension >= 0 &&
+      width !== null &&
+      width !== undefined &&
+      dimension < width;
+    if (!validDimension) {
+      setAblationError(
+        `Dimension must be an integer from 0 through ${(width ?? 1) - 1}.`,
+      );
+      return;
+    }
+    if (ablationScope === "token" && tokenPosition === null) {
+      setAblationError("Analyze a prompt and select a token first.");
+      return;
+    }
+
+    setAblationBusy(true);
+    setAblationError("");
+    setAblationStatus("");
+    try {
+      const result = await engine.ablateFeature(
+        ablationNode,
+        dimension,
+        ablationMode,
+        ablationScope,
+        ablationScope === "token" ? tokenPosition : null,
+      );
+      if (!result.ok) {
+        setAblationError(result.status);
+        setActiveAblation(null);
+        setView("baseline");
+        return;
+      }
+      setActiveAblation(result.ablation);
+      setAblationStatus(result.status);
+      setView("ablated");
+      await runInspect(
+        effectiveKey,
+        tokenPosition,
+        "ablated",
+        highlightToken || null,
+      );
+    } catch (error) {
+      setAblationError(errorMessage(error));
+      setActiveAblation(null);
+      setView("baseline");
+    } finally {
+      setAblationBusy(false);
+    }
+  }
+
+  async function handleClearAblation(): Promise<void> {
+    setAblationBusy(true);
+    setAblationError("");
+    try {
+      const result = await engine.clearAblation();
+      setActiveAblation(null);
+      setView("baseline");
+      setHighlightToken("");
+      setAblationStatus(result.status);
+      await runInspect(effectiveKey, tokenPosition, "baseline", null);
+    } catch (error) {
+      setAblationError(errorMessage(error));
+    } finally {
+      setAblationBusy(false);
+    }
+  }
+
+  function handleHighlightTokenSubmit(): void {
+    if (!activeAblation) return;
+    void runInspect(
+      effectiveKey,
+      tokenPosition,
+      view,
+      highlightToken.trim() || null,
+    ).catch(() => undefined);
   }
 
   const inspectReady = inspectResult?.state === "ready";
@@ -192,6 +330,18 @@ export function App() {
   const hasAnalysis = Boolean(analysis?.ok);
   const selectedNodeKey =
     inspectReady && inspectResult?.node ? inspectResult.node.key : effectiveKey;
+  const hasAblation = Boolean(activeAblation);
+  const ablationWidth =
+    ablationNode === "ffn_hidden"
+      ? loadResult?.meta.feed_forward_dim
+      : loadResult?.meta.embedding_dim;
+  const dimensionValue = Number(ablationDim);
+  const dimensionValid =
+    Number.isInteger(dimensionValue) &&
+    dimensionValue >= 0 &&
+    ablationWidth !== null &&
+    ablationWidth !== undefined &&
+    dimensionValue < ablationWidth;
 
   return (
     <div className={focused ? "ct-page ct-page-focused" : "ct-page"}>
@@ -366,6 +516,122 @@ export function App() {
               </>
             )}
           </section>
+
+          <section className="ct-panel" data-testid="ablation-panel">
+            <h2 className="ct-section-label">03 / TEST A FEATURE</h2>
+            <p className="ct-muted ct-panel-copy">
+              Remove one activation dimension, rerun the model, and inspect
+              which downstream predictions move.
+            </p>
+            <label className="ct-select-wrap">
+              <span className="ct-field-label">Activation node</span>
+              <select
+                className="ct-select"
+                value={ablationNode}
+                onChange={(event) => setAblationNode(event.target.value)}
+                disabled={!hasAnalysis || ablationBusy}
+                data-testid="ablation-node-select"
+              >
+                {(options?.ablation_nodes ?? []).map((node) => (
+                  <option key={node.key} value={node.key}>
+                    {node.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="ct-control-row">
+              <label className="ct-select-wrap">
+                <span className="ct-field-label">Dimension</span>
+                <input
+                  className="ct-number-input"
+                  type="number"
+                  min={0}
+                  max={ablationWidth ? ablationWidth - 1 : undefined}
+                  step={1}
+                  value={ablationDim}
+                  onChange={(event) => setAblationDim(event.target.value)}
+                  disabled={!hasAnalysis || ablationBusy}
+                  data-testid="ablation-dim-input"
+                />
+              </label>
+              <span className="ct-input-hint">
+                {ablationWidth
+                  ? `valid range: 0–${ablationWidth - 1}`
+                  : "load a model for the dimension range"}
+              </span>
+            </div>
+            <label className="ct-select-wrap">
+              <span className="ct-field-label">Scope</span>
+              <select
+                className="ct-select"
+                value={ablationScope}
+                onChange={(event) =>
+                  setAblationScope(event.target.value as "token" | "all")
+                }
+                disabled={!hasAnalysis || ablationBusy}
+                data-testid="ablation-scope-select"
+              >
+                <option value="token">
+                  Current token ({tokenPosition === null ? "—" : tokenPosition})
+                </option>
+                <option value="all">All prompt tokens</option>
+              </select>
+            </label>
+            <label className="ct-select-wrap">
+              <span className="ct-field-label">Replacement</span>
+              <select
+                className="ct-select"
+                value={ablationMode}
+                onChange={(event) =>
+                  setAblationMode(event.target.value as "zero" | "mean")
+                }
+                disabled={!hasAnalysis || ablationBusy}
+                data-testid="ablation-mode-select"
+              >
+                <option value="zero">Zero activation</option>
+                <option value="mean">Leave-one-out token mean</option>
+              </select>
+            </label>
+            <p className="ct-input-hint">
+              Dimension numbers match the dim index shown when hovering a
+              heatmap. Mean ablation uses the other prompt tokens.
+            </p>
+            <div className="ct-button-row">
+              <button
+                type="button"
+                className="ct-button ct-button-primary"
+                onClick={() => void handleAblate()}
+                disabled={
+                  !hasAnalysis ||
+                  !loadResult?.loaded ||
+                  ablationBusy ||
+                  !dimensionValid ||
+                  (ablationScope === "token" && tokenPosition === null)
+                }
+                data-testid="ablate-button"
+              >
+                Ablate feature
+              </button>
+              <button
+                type="button"
+                className="ct-button ct-button-ghost"
+                onClick={() => void handleClearAblation()}
+                disabled={!hasAblation || ablationBusy}
+                data-testid="clear-ablation-button"
+              >
+                Clear
+              </button>
+              {ablationBusy && <span className="ct-busy">Rerunning…</span>}
+            </div>
+            <p
+              className={`ct-status ${ablationError ? "ct-status-error" : ablationStatus ? "ct-status-ok" : ""}`}
+              data-testid="ablation-status"
+            >
+              {ablationError ||
+                ablationStatus ||
+                "Analyze a prompt, choose a dimension, then ablate it."}
+            </p>
+          </section>
         </aside>
 
         <main className="ct-workspace">
@@ -378,6 +644,30 @@ export function App() {
                 </h3>
               </div>
               <div className="ct-panel-head-actions">
+                {hasAblation && (
+                  <div
+                    className="ct-view-toggle"
+                    role="group"
+                    aria-label="Activation view"
+                    data-testid="view-toggle"
+                  >
+                    {(["baseline", "ablated", "diff"] as InspectView[]).map(
+                      (candidate) => (
+                        <button
+                          key={candidate}
+                          type="button"
+                          className={`ct-view-button ${view === candidate ? "ct-view-button-selected" : ""}`}
+                          aria-pressed={view === candidate}
+                          onClick={() => handleView(candidate)}
+                        >
+                          {candidate === "diff"
+                            ? "Difference"
+                            : candidate[0].toUpperCase() + candidate.slice(1)}
+                        </button>
+                      ),
+                    )}
+                  </div>
+                )}
                 <button
                   type="button"
                   className="ct-button ct-button-ghost"
@@ -529,6 +819,9 @@ export function App() {
               <NodeView
                 inspect={inspectResult}
                 onSelectPosition={handleSelectToken}
+                highlightToken={highlightToken}
+                onHighlightTokenChange={setHighlightToken}
+                onHighlightTokenSubmit={handleHighlightTokenSubmit}
               />
             ) : null}
           </section>

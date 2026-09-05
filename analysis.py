@@ -5,7 +5,12 @@ import numpy as np
 import tensorflow as tf
 
 from checkpoint import LoadedCheckpoint
-from inspection import CapturedRun, InspectionError, capture_locations
+from inspection import (
+    AblationSpec,
+    CapturedRun,
+    InspectionError,
+    capture_locations,
+)
 from preprocess import (
     PADDING_TOKEN_ID,
     UNKNOWN_TOKEN_ID,
@@ -55,21 +60,14 @@ def display_text(token_id: int, vocabulary: List[str]) -> str:
     return vocabulary[token_id]
 
 
-def analyze_prompt(prompt: str, checkpoint: LoadedCheckpoint) -> PromptAnalysis:
-    if not isinstance(prompt, str) or not prompt.strip():
-        raise AnalysisError("Enter a prompt first.")
-
+def _analysis_from_ids(
+    ids: tf.Tensor,
+    captured: CapturedRun,
+    checkpoint: LoadedCheckpoint,
+) -> PromptAnalysis:
+    ids = tf.convert_to_tensor(ids, dtype=tf.int32)
     vocabulary = checkpoint.vocabulary
-    processed = pad_punctuation(prompt)
-    vectorizer = build_text_vectorizer(vocabulary=vocabulary)
-    ids = tf.cast(vectorizer(tf.constant([processed])), tf.int32)[0]
-
-    try:
-        captured = capture_locations(checkpoint, ids)
-    except InspectionError as error:
-        raise AnalysisError(str(error)) from error
     token_count = captured.token_count
-
     unknown_count = int(
         tf.reduce_sum(tf.cast(tf.equal(ids, UNKNOWN_TOKEN_ID), tf.int32))
     )
@@ -107,3 +105,32 @@ def analyze_prompt(prompt: str, checkpoint: LoadedCheckpoint) -> PromptAnalysis:
         next_tokens=next_tokens,
         capture=captured,
     )
+
+
+def analyze_prompt(prompt: str, checkpoint: LoadedCheckpoint) -> PromptAnalysis:
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise AnalysisError("Enter a prompt first.")
+
+    vocabulary = checkpoint.vocabulary
+    processed = pad_punctuation(prompt)
+    vectorizer = build_text_vectorizer(vocabulary=vocabulary)
+    ids = tf.cast(vectorizer(tf.constant([processed])), tf.int32)[0]
+
+    try:
+        captured = capture_locations(checkpoint, ids)
+    except InspectionError as error:
+        raise AnalysisError(str(error)) from error
+    return _analysis_from_ids(ids, captured, checkpoint)
+
+
+def ablate_analysis(
+    token_ids,
+    checkpoint: LoadedCheckpoint,
+    ablation: AblationSpec,
+) -> PromptAnalysis:
+    ids = tf.convert_to_tensor(token_ids, dtype=tf.int32)
+    try:
+        captured = capture_locations(checkpoint, ids, ablation=ablation)
+    except InspectionError as error:
+        raise AnalysisError(str(error)) from error
+    return _analysis_from_ids(ids, captured, checkpoint)

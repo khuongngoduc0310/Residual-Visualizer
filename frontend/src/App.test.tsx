@@ -21,6 +21,8 @@ const engine = vi.hoisted(() => ({
   getOptions: vi.fn(),
   loadCheckpoint: vi.fn(),
   analyzePrompt: vi.fn(),
+  ablateFeature: vi.fn(),
+  clearAblation: vi.fn(),
   inspectNode: vi.fn(),
 }));
 
@@ -74,6 +76,14 @@ const optionsFixture: OptionsPayload = {
     default_node: "output_norm",
   },
   locations: [],
+  ablation_nodes: [
+    {
+      key: "ffn_hidden",
+      label: "FFN hidden (ReLU)",
+      kind: "hidden",
+      family: "hidden",
+    },
+  ],
 };
 
 const loadFixture: LoadPayload = {
@@ -116,13 +126,29 @@ function nodeInfo(key: string): GraphNode {
   return node ?? fallback;
 }
 
-function inspectFixture(key: string | null): InspectPayload {
+function inspectFixture(
+  key: string | null,
+  view: "baseline" | "ablated" | "diff" = "baseline",
+): InspectPayload {
   const nodeKey = key ?? "output_norm";
   const node = nodeInfo(nodeKey);
   return {
     ok: true,
     state: "ready",
     message: "",
+    view,
+    ablation:
+      view === "baseline"
+        ? null
+        : {
+            node_key: "ffn_hidden",
+            node_label: "FFN hidden (ReLU)",
+            dim: 0,
+            mode: "zero",
+            scope: "token",
+            position: 1,
+            baseline_value: 0,
+          },
     node,
     selected_position: 1,
     token_choices: [
@@ -139,6 +165,20 @@ function inspectFixture(key: string | null): InspectPayload {
     readout_figure: node.kind === "readout" ? { data: [{}], layout: {} } : null,
     entropy_figure: null,
     readout_rows: [],
+    readout_compare:
+      view === "baseline" || node.kind !== "readout"
+        ? null
+        : {
+            base_top: [],
+            ablated_top: [],
+            movers: [],
+            has_effect: false,
+          },
+    readout_compare_figure:
+      view === "baseline" || node.kind !== "readout"
+        ? null
+        : { data: [{}], layout: {} },
+    position_effects: [],
   };
 }
 
@@ -147,8 +187,27 @@ beforeEach(() => {
   engine.getOptions.mockResolvedValue(optionsFixture);
   engine.loadCheckpoint.mockResolvedValue(loadFixture);
   engine.analyzePrompt.mockResolvedValue(analyzeFixture);
-  engine.inspectNode.mockImplementation(async (key: string | null) =>
-    inspectFixture(key),
+  engine.ablateFeature.mockResolvedValue({
+    ok: true,
+    status: "Ablated ffn_hidden dimension 0.",
+    ablation: {
+      node_key: "ffn_hidden",
+      node_label: "FFN hidden (ReLU)",
+      dim: 0,
+      mode: "zero",
+      scope: "token",
+      position: 1,
+      baseline_value: 0,
+    },
+    strongest_position: 1,
+  });
+  engine.clearAblation.mockResolvedValue({ ok: true, status: "Ablation cleared." });
+  engine.inspectNode.mockImplementation(
+    async (
+      key: string | null,
+      _position: number | null,
+      view: "baseline" | "ablated" | "diff" = "baseline",
+    ) => inspectFixture(key, view),
   );
 });
 
@@ -313,6 +372,73 @@ describe("App", () => {
       expect(engine.inspectNode).toHaveBeenLastCalledWith(
         "output_norm",
         0,
+      ),
+    );
+  });
+
+  it("ablates a feature and keeps the current node in ablated view", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "Load model" }));
+    await waitFor(() => expect(screen.getByTestId("load-status")).toHaveTextContent("Model loaded"));
+    await user.type(screen.getByLabelText(/Prompt/), "hello ,");
+    await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("node-label")).toHaveTextContent(
+        "Layer norm block output",
+      ),
+    );
+
+    await user.click(screen.getByTestId("ablate-button"));
+
+    await waitFor(() =>
+      expect(engine.ablateFeature).toHaveBeenCalledWith(
+        "ffn_hidden",
+        0,
+        "zero",
+        "token",
+        1,
+      ),
+    );
+    expect(await screen.findByTestId("view-toggle")).toBeInTheDocument();
+    expect(screen.getByTestId("ablation-status")).toHaveTextContent("Ablated");
+    expect(engine.inspectNode).toHaveBeenLastCalledWith(
+      "output_norm",
+      1,
+      "ablated",
+      null,
+    );
+  });
+
+  it("shows readout movers and highlights a hypothesized token", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "Load model" }));
+    await user.type(screen.getByLabelText(/Prompt/), "hello ,");
+    await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
+    await waitFor(() => screen.getByTestId("node-label"));
+    await user.click(screen.getByTestId("ablate-button"));
+    await waitFor(() => screen.getByTestId("view-toggle"));
+
+    const readoutChip = screen
+      .getByTestId("node-strip")
+      .querySelector('[data-node="readout"]');
+    expect(readoutChip).not.toBeNull();
+    await user.click(readoutChip as Element);
+
+    expect(await screen.findByTestId("ablation-results")).toBeInTheDocument();
+    const input = screen.getByTestId("hypothesized-token-input");
+    await user.type(input, "world");
+    await user.click(screen.getByTestId("highlight-token-button"));
+
+    await waitFor(() =>
+      expect(engine.inspectNode).toHaveBeenLastCalledWith(
+        "readout",
+        1,
+        "ablated",
+        "world",
       ),
     );
   });

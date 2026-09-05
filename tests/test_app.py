@@ -294,6 +294,94 @@ def test_failed_analysis_clears_previous_results(tmp_path):
     assert manager.inspection_session is None
 
 
+def test_ablation_requires_a_loaded_analysis():
+    manager = app.ModelManager(device_detector=lambda: fake_device())
+
+    payload = app.ablate_feature_payload(
+        manager,
+        "ffn_hidden",
+        0,
+        "zero",
+        "all",
+        None,
+    )
+
+    assert not payload["ok"]
+    assert "Load a checkpoint" in payload["status"]
+
+
+def test_ablation_stores_a_capture_and_exposes_comparisons(tmp_path):
+    manager, _ = analyze_fixture(tmp_path)
+
+    result = app.ablate_feature_payload(
+        manager,
+        "ffn_hidden",
+        0,
+        "zero",
+        "token",
+        1,
+    )
+
+    assert result["ok"]
+    assert manager.inspection_session.ablated is not None
+    assert result["ablation"]["dim"] == 0
+
+    diff = app.inspect_node_payload(
+        manager,
+        "ffn_hidden",
+        1,
+        "diff",
+    )
+    assert diff["state"] == "ready"
+    assert diff["view"] == "diff"
+    assert diff["map_figure"]["data"]
+    assert diff["ablation"]["node_key"] == "ffn_hidden"
+
+    readout = app.inspect_node_payload(
+        manager,
+        "readout",
+        1,
+        "ablated",
+    )
+    assert readout["readout_compare"] is not None
+    assert readout["readout_compare_figure"]["data"]
+    assert len(readout["position_effects"]) == 3
+    for row in readout["readout_compare"]["movers"]:
+        token_id = row["token_id"]
+        baseline_probability = manager.inspection_session.analysis.capture.probabilities[
+            1, token_id
+        ]
+        ablated_probability = manager.inspection_session.ablated.analysis.capture.probabilities[
+            1, token_id
+        ]
+        assert row["delta"] == pytest.approx(
+            ablated_probability - baseline_probability
+        )
+
+
+def test_clearing_ablation_keeps_the_baseline_capture(tmp_path):
+    manager, _ = analyze_fixture(tmp_path)
+    app.ablate_feature_payload(manager, "output_norm", 0, "zero", "all")
+    assert manager.inspection_session.ablated is not None
+
+    result = app.clear_ablation_payload(manager)
+
+    assert result == {"ok": True, "status": "Ablation cleared."}
+    assert manager.inspection_session is not None
+    assert manager.inspection_session.ablated is None
+    baseline = app.inspect_node_payload(manager, "output_norm", 0, "baseline")
+    assert baseline["view"] == "baseline"
+
+
+def test_non_baseline_view_requires_an_active_ablation(tmp_path):
+    manager, _ = analyze_fixture(tmp_path)
+
+    payload = app.inspect_node_payload(manager, "output_norm", 0, "diff")
+
+    assert payload["state"] == "error"
+    assert "No ablation is active" in payload["message"]
+
+
 # --------------------------------------------------------------------------- #
 # Inspection payloads
 
@@ -542,6 +630,14 @@ def test_options_payload_describes_the_stream_graph():
     assert attention["adds_before"] == "attention_residual"
     assert attention["nodes"] == ["attention_pattern", "attention_update"]
     assert graph["components"] == list(EMBEDDING_COMPONENTS)
+    assert [node["key"] for node in payload["ablation_nodes"]] == [
+        "embedding",
+        "attention_residual",
+        "attention_norm",
+        "ffn_hidden",
+        "ffn_residual",
+        "output_norm",
+    ]
     output_norm = next(
         node for node in graph["nodes"] if node["key"] == "output_norm"
     )
@@ -558,6 +654,8 @@ def test_create_app_builds_endpoints_without_launching():
     assert {
         "load_checkpoint",
         "analyze_prompt",
+        "ablate_feature",
+        "clear_ablation",
         "inspect_node",
         "options",
     } <= api_names

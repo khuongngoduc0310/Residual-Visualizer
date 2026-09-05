@@ -58,6 +58,7 @@ export interface LocationLite {
 export interface OptionsPayload {
   graph: StreamGraph;
   locations: LocationLite[];
+  ablation_nodes: LocationLite[];
 }
 
 export interface ModelMeta {
@@ -135,12 +136,49 @@ export type FigureKind =
   | "hidden"
   | "pattern"
   | "readout_topk"
+  | "readout_delta"
   | null;
+
+export type InspectView = "baseline" | "ablated" | "diff";
+
+export interface AblationInfo {
+  node_key: string;
+  node_label: string;
+  dim: number;
+  mode: "zero" | "mean";
+  scope: "token" | "all";
+  position: number | null;
+  baseline_value: number;
+}
+
+export interface MoverRow {
+  token_id: number;
+  text: string;
+  baseline_probability: number;
+  ablated_probability: number;
+  delta: number;
+  highlighted: boolean;
+}
+
+export interface PositionEffect {
+  position: number;
+  text: string;
+  effect: number;
+}
+
+export interface ReadoutCompare {
+  base_top: NextTokenRow[];
+  ablated_top: NextTokenRow[];
+  movers: MoverRow[];
+  has_effect: boolean;
+}
 
 export interface InspectPayload {
   ok: boolean;
   state: "awaiting" | "ready" | "error";
   message: string;
+  view: InspectView;
+  ablation: AblationInfo | null;
   node: GraphNode | null;
   selected_position: number | null;
   token_choices: TokenChoice[];
@@ -154,4 +192,14 @@ export interface InspectPayload {
   readout_figure: FigureSpec | null;
   entropy_figure: FigureSpec | null;
   readout_rows: NextTokenRow[];
+  readout_compare: ReadoutCompare | null;
+  readout_compare_figure: FigureSpec | null;
+  position_effects: PositionEffect[];
+}
+
+export interface AblationOperationPayload {
+  ok: boolean;
+  status: string;
+  ablation: AblationInfo | null;
+  strongest_position: number | null;
 }

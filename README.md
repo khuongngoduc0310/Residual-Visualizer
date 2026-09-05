@@ -194,6 +194,40 @@ Captured tensors live in memory for the session only. They are cleared when a
 new checkpoint is loaded, replaced by a fresh analysis, or dropped after a
 failed analysis.
 
+## Validate A Feature By Ablation
+
+After analyzing a prompt, use **Test a feature** to remove one activation
+dimension and rerun the model. Choose an ablatable node, enter the dimension
+index shown when hovering its heatmap, choose the current token or all prompt
+tokens, and choose either **Zero activation** or **Leave-one-out token mean**.
+The baseline capture remains available while the ablated capture is stored in
+memory for comparison.
+
+The initial ablatable nodes are `ffn_hidden`, `embedding`,
+`attention_residual`, `attention_norm`, `ffn_residual`, and `output_norm`.
+`ffn_hidden` dimensions use the configured feed-forward width; the other
+nodes use the configured model width. Zero ablation removes the selected
+value. Mean ablation replaces it with the same feature's mean at the other
+prompt positions for a token-scoped test, or its full prompt mean for an
+all-token test. A one-token prompt cannot use token-scoped mean ablation.
+
+Use the **Baseline**, **Ablated**, and **Difference** views to inspect the
+causal path. The Readout view compares the top predictions and ranks the
+largest full-vocabulary probability movements. The delta is `ablated -
+baseline`: a negative delta means that the ablated feature had been promoting
+that token. The per-position effect summary helps distinguish a feature that
+matters at another prompt position from one that has no measurable effect.
+You can enter a hypothesized output token to keep it visible in the mover
+table and highlight it in the chart.
+
+This is a hypothesis test, not an automatic interpretation: a feature is
+supported when its ablation changes the predicted behavior in the direction
+your hypothesis predicts, ideally across more than one prompt. A feature that
+is already zero at the ablated positions will produce no change. Ablating a
+dimension before a layer norm can also spread the difference across the
+following normalized vector because normalization rescales the whole token.
+
+
 ## Checkpoint Folder
 
 Each checkpoint is one folder containing exactly these generated files:
