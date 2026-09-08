@@ -22,12 +22,12 @@ export function analyzePrompt(prompt: string): Promise<AnalyzePayload> {
 
 export function ablateFeature(
   nodeKey: string,
-  dim: number,
+  dims: number[],
   mode: "zero" | "mean",
   scope: "token" | "all",
   position: number | null,
 ): Promise<AblationOperationPayload> {
-  return callApi("ablate_feature", [nodeKey, dim, mode, scope, position]);
+  return callApi("ablate_feature", [nodeKey, dims, mode, scope, position]);
 }
 
 export function clearAblation(): Promise<{ ok: boolean; status: string }> {
@@ -39,11 +39,13 @@ export function inspectNode(
   tokenPosition: number | null,
   view: InspectView = "baseline",
   highlightToken: string | null = null,
+  deembed = false,
 ): Promise<InspectPayload> {
   return callApi("inspect_node", [
     nodeKey,
     tokenPosition,
     view,
     highlightToken,
+    deembed,
   ]);
 }

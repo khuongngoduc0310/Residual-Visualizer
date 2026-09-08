@@ -42,11 +42,11 @@ def token_ids():
     return tf.constant([2, 3, 4], dtype=tf.int32)
 
 
-def test_zero_ablation_replaces_exactly_one_output_dimension(loaded_checkpoint):
+def test_zero_ablation_replaces_selected_output_dimensions(loaded_checkpoint):
     baseline = capture_locations(loaded_checkpoint, token_ids())
     spec = AblationSpec(
         node_key="output_norm",
-        dim=2,
+        dims=(2, 4),
         mode="zero",
         scope="token",
         position=1,
@@ -57,10 +57,13 @@ def test_zero_ablation_replaces_exactly_one_output_dimension(loaded_checkpoint):
         ablated.locations["output_norm"][1, :2],
         baseline.locations["output_norm"][1, :2],
     )
-    assert ablated.locations["output_norm"][1, 2] == 0.0
     np.testing.assert_array_equal(
-        ablated.locations["output_norm"][1, 3:],
-        baseline.locations["output_norm"][1, 3:],
+        ablated.locations["output_norm"][1, [2, 4]],
+        np.zeros(2),
+    )
+    np.testing.assert_array_equal(
+        ablated.locations["output_norm"][1, [0, 1, 3, 5, 6, 7]],
+        baseline.locations["output_norm"][1, [0, 1, 3, 5, 6, 7]],
     )
     np.testing.assert_array_equal(
         ablated.locations["output_norm"][[0, 2]],
@@ -72,7 +75,7 @@ def test_ffn_hidden_ablation_recomputes_the_output_write(loaded_checkpoint):
     baseline = capture_locations(loaded_checkpoint, token_ids())
     spec = AblationSpec(
         node_key="ffn_hidden",
-        dim=1,
+        dims=(1, 5),
         mode="zero",
         scope="token",
         position=2,
@@ -80,9 +83,9 @@ def test_ffn_hidden_ablation_recomputes_the_output_write(loaded_checkpoint):
     ablated = capture_locations(loaded_checkpoint, token_ids(), spec)
 
     block = loaded_checkpoint.model.get_layer("transformer_block")
-    hidden_value = baseline.locations["ffn_hidden"][2, spec.dim]
-    output_column = block.ffn_2.kernel.numpy()[spec.dim, :]
-    expected_update_delta = -hidden_value * output_column
+    hidden_values = baseline.locations["ffn_hidden"][2, list(spec.dims)]
+    output_columns = block.ffn_2.kernel.numpy()[list(spec.dims), :]
+    expected_update_delta = -hidden_values @ output_columns
     actual_update_delta = (
         ablated.locations["ffn_update"][2]
         - baseline.locations["ffn_update"][2]
@@ -103,15 +106,23 @@ def test_mean_ablation_uses_leave_one_out_value(loaded_checkpoint):
     baseline = capture_locations(loaded_checkpoint, token_ids())
     spec = AblationSpec(
         node_key="output_norm",
-        dim=4,
+        dims=(4, 6),
         mode="mean",
         scope="token",
         position=1,
     )
     ablated = capture_locations(loaded_checkpoint, token_ids(), spec)
-    expected = np.mean(np.delete(baseline.locations["output_norm"][:, 4], 1))
+    expected = np.mean(
+        np.delete(baseline.locations["output_norm"][:, list(spec.dims)], 1, axis=0),
+        axis=0,
+    )
 
-    assert ablated.locations["output_norm"][1, 4] == expected
+    np.testing.assert_allclose(
+        ablated.locations["output_norm"][1, list(spec.dims)],
+        expected,
+        rtol=1e-6,
+        atol=1e-7,
+    )
     np.testing.assert_array_equal(
         ablated.locations["output_norm"][[0, 2]],
         baseline.locations["output_norm"][[0, 2]],
@@ -122,16 +133,19 @@ def test_all_token_mean_ablation_makes_the_column_constant(loaded_checkpoint):
     baseline = capture_locations(loaded_checkpoint, token_ids())
     spec = AblationSpec(
         node_key="ffn_hidden",
-        dim=3,
+        dims=(3, 5),
         mode="mean",
         scope="all",
     )
     ablated = capture_locations(loaded_checkpoint, token_ids(), spec)
-    expected = np.mean(baseline.locations["ffn_hidden"][:, 3])
+    expected = np.mean(
+        baseline.locations["ffn_hidden"][:, list(spec.dims)],
+        axis=0,
+    )
 
     np.testing.assert_array_equal(
-        ablated.locations["ffn_hidden"][:, 3],
-        np.full(3, expected),
+        ablated.locations["ffn_hidden"][:, list(spec.dims)],
+        np.broadcast_to(expected, (3, len(spec.dims))),
     )
 
 
@@ -139,7 +153,7 @@ def test_embedding_ablation_respects_causal_prefix(loaded_checkpoint):
     baseline = capture_locations(loaded_checkpoint, token_ids())
     spec = AblationSpec(
         node_key="embedding",
-        dim=0,
+        dims=(0, 2),
         mode="zero",
         scope="token",
         position=1,
@@ -165,7 +179,7 @@ def test_ablation_rejects_invalid_dimension_and_single_token_mean(loaded_checkpo
             token_ids(),
             AblationSpec(
                 node_key="ffn_hidden",
-                dim=loaded_checkpoint.config.feed_forward_dim,
+                dims=(loaded_checkpoint.config.feed_forward_dim,),
                 mode="zero",
                 scope="all",
             ),
@@ -177,9 +191,27 @@ def test_ablation_rejects_invalid_dimension_and_single_token_mean(loaded_checkpo
             tf.constant([2], dtype=tf.int32),
             AblationSpec(
                 node_key="output_norm",
-                dim=0,
+                dims=(0,),
                 mode="mean",
                 scope="token",
                 position=0,
             ),
+        )
+
+
+def test_ablation_deduplicates_dimensions_and_rejects_empty_lists():
+    spec = AblationSpec(
+        node_key="output_norm",
+        dims=(4, 2, 4),
+        mode="zero",
+        scope="all",
+    )
+
+    assert spec.dims == (2, 4)
+    with pytest.raises(AblationError, match="At least one"):
+        AblationSpec(
+            node_key="output_norm",
+            dims=(),
+            mode="zero",
+            scope="all",
         )

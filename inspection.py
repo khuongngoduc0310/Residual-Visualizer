@@ -273,7 +273,7 @@ class AblationError(ValueError):
 @dataclass(frozen=True)
 class AblationSpec:
     node_key: str
-    dim: int
+    dims: Tuple[int, ...]
     mode: str
     scope: str
     position: int | None = None
@@ -283,10 +283,22 @@ class AblationSpec:
             raise AblationError(
                 f"Node cannot be ablated: {self.node_key}"
             )
-        if isinstance(self.dim, bool) or not isinstance(self.dim, int):
-            raise AblationError("Ablation dimension must be an integer")
-        if self.dim < 0:
-            raise AblationError("Ablation dimension must be non-negative")
+        try:
+            supplied_dims = tuple(self.dims)
+        except TypeError as error:
+            raise AblationError(
+                "Ablation dimensions must be a sequence of integers"
+            ) from error
+        if not supplied_dims:
+            raise AblationError("At least one ablation dimension is required")
+        for dim in supplied_dims:
+            if isinstance(dim, bool) or not isinstance(dim, int):
+                raise AblationError("Ablation dimensions must be integers")
+            if dim < 0:
+                raise AblationError(
+                    "Ablation dimensions must be non-negative"
+                )
+        object.__setattr__(self, "dims", tuple(sorted(set(supplied_dims))))
         if self.mode not in ABLATION_MODES:
             raise AblationError(
                 f"Ablation mode must be one of: {', '.join(ABLATION_MODES)}"
@@ -349,10 +361,11 @@ def _validate_ablation(
     token_count: int,
 ) -> None:
     width = node_width(ablation.node_key, checkpoint.config)
-    if ablation.dim >= width:
+    invalid_dims = [dim for dim in ablation.dims if dim >= width]
+    if invalid_dims:
         raise AblationError(
-            f"Ablation dimension {ablation.dim} is outside the width of "
-            f"{ablation.node_key} ({width})"
+            f"Ablation dimension(s) {', '.join(map(str, invalid_dims))} are "
+            f"outside the width of {ablation.node_key} ({width})"
         )
     if ablation.scope == "token":
         if ablation.position >= token_count:
@@ -367,35 +380,38 @@ def _validate_ablation(
             )
 
 
-def ablation_replacement_value(
+def ablation_replacement_values(
     values: np.ndarray,
     ablation: AblationSpec,
-) -> float:
+) -> list[float]:
     matrix = np.asarray(values)
     if matrix.ndim != 2:
         raise AblationError("Ablation values must be two-dimensional")
-    if ablation.dim >= matrix.shape[1]:
+    invalid_dims = [dim for dim in ablation.dims if dim >= matrix.shape[1]]
+    if invalid_dims:
         raise AblationError(
-            f"Ablation dimension {ablation.dim} is outside the tensor width "
-            f"({matrix.shape[1]})"
+            f"Ablation dimension(s) {', '.join(map(str, invalid_dims))} are "
+            f"outside the tensor width ({matrix.shape[1]})"
         )
     if ablation.mode == "zero":
-        return 0.0
-    column = matrix[:, ablation.dim]
+        return [0.0 for _ in ablation.dims]
+    columns = matrix[:, list(ablation.dims)]
     if ablation.scope == "all":
-        return float(np.mean(column))
+        replacements = np.mean(columns, axis=0)
+        return [float(value) for value in replacements]
     if ablation.position >= matrix.shape[0]:
         raise AblationError(
             f"Ablation token position {ablation.position} is outside the "
             f"tensor ({matrix.shape[0]} token(s))"
         )
-    remaining = np.delete(column, ablation.position)
+    remaining = np.delete(columns, ablation.position, axis=0)
     if remaining.size == 0:
         raise AblationError(
             "Mean ablation at one token requires another token for its "
             "leave-one-out baseline"
         )
-    return float(np.mean(remaining))
+    replacements = np.mean(remaining, axis=0)
+    return [float(value) for value in replacements]
 
 
 def _apply_ablation(
@@ -404,37 +420,49 @@ def _apply_ablation(
     token_count: int,
 ) -> tf.Tensor:
     matrix = tf.squeeze(tensor, axis=0)
-    column = matrix[:, ablation.dim]
+    dim_indices = tf.constant(ablation.dims, dtype=tf.int32)
+    columns = tf.gather(matrix, dim_indices, axis=1)
     if ablation.mode == "zero":
-        replacement = tf.zeros_like(column)
+        replacement_values = tf.zeros(
+            [len(ablation.dims)],
+            dtype=matrix.dtype,
+        )
     elif ablation.scope == "all":
-        replacement = tf.fill(
-            [token_count],
-            tf.reduce_mean(column),
-        )
+        replacement_values = tf.reduce_mean(columns, axis=0)
     else:
-        row_mask = tf.equal(
-            tf.range(token_count),
-            tf.cast(ablation.position, tf.int32),
-        )
-        remaining = tf.boolean_mask(column, tf.logical_not(row_mask))
-        replacement_value = tf.reduce_mean(remaining)
-        replacement = tf.fill([token_count], replacement_value)
+        replacement_values = (
+            tf.reduce_sum(columns, axis=0) - columns[ablation.position]
+        ) / tf.cast(token_count - 1, matrix.dtype)
 
-    if ablation.scope == "all":
-        row_mask = tf.ones([token_count], dtype=tf.bool)
-    else:
-        row_mask = tf.equal(
+    row_mask = (
+        tf.ones([token_count], dtype=tf.bool)
+        if ablation.scope == "all"
+        else tf.equal(
             tf.range(token_count),
             tf.cast(ablation.position, tf.int32),
         )
-    column_mask = tf.equal(
-        tf.range(tf.shape(matrix)[1]),
-        tf.cast(ablation.dim, tf.int32),
+    )
+    column_mask = tf.reduce_any(
+        tf.equal(
+            tf.range(tf.shape(matrix)[1])[:, None],
+            dim_indices[None, :],
+        ),
+        axis=1,
     )
     cell_mask = tf.logical_and(row_mask[:, None], column_mask[None, :])
+    replacement_row = tf.reduce_sum(
+        replacement_values[:, None]
+        * tf.cast(
+            tf.equal(
+                dim_indices[:, None],
+                tf.range(tf.shape(matrix)[1])[None, :],
+            ),
+            matrix.dtype,
+        ),
+        axis=0,
+    )
     replacement_matrix = tf.broadcast_to(
-        replacement[:, None],
+        replacement_row[None, :],
         tf.shape(matrix),
     )
     return tf.expand_dims(

@@ -32,6 +32,45 @@ function formatCount(value: number | null): string {
   return value === null ? "—" : String(value);
 }
 
+function parseAblationDimensions(
+  value: string,
+  width: number | null | undefined,
+): { dims: number[]; error: string } {
+  const parts = value.trim().split(/[\s,]+/).filter(Boolean);
+  if (parts.length === 0) {
+    return { dims: [], error: "Enter at least one dimension." };
+  }
+
+  const parsed: number[] = [];
+  for (const part of parts) {
+    if (!/^\d+$/.test(part)) {
+      return {
+        dims: [],
+        error:
+          "Dimensions must be non-negative integers separated by commas or spaces.",
+      };
+    }
+    const dimension = Number(part);
+    if (!Number.isSafeInteger(dimension)) {
+      return { dims: [], error: `Dimension is too large: ${part}.` };
+    }
+    parsed.push(dimension);
+  }
+
+  const dims = [...new Set(parsed)].sort((left, right) => left - right);
+  if (width === null || width === undefined) {
+    return { dims: [], error: "Load a model before choosing dimensions." };
+  }
+  const invalid = dims.filter((dimension) => dimension >= width);
+  if (invalid.length > 0) {
+    return {
+      dims: [],
+      error: `Dimensions must be integers from 0 through ${width - 1}.`,
+    };
+  }
+  return { dims, error: "" };
+}
+
 export function App() {
   const [options, setOptions] = useState<OptionsPayload | null>(null);
 
@@ -52,8 +91,9 @@ export function App() {
   const [tokenPosition, setTokenPosition] = useState<number | null>(null);
   const [view, setView] = useState<InspectView>("baseline");
   const [activeAblation, setActiveAblation] = useState<AblationInfo | null>(null);
+  const [deembedEnabled, setDeembedEnabled] = useState(false);
   const [ablationNode, setAblationNode] = useState("ffn_hidden");
-  const [ablationDim, setAblationDim] = useState("0");
+  const [ablationDimsText, setAblationDimsText] = useState("0");
   const [ablationMode, setAblationMode] = useState<"zero" | "mean">("zero");
   const [ablationScope, setAblationScope] = useState<"token" | "all">("token");
   const [ablationBusy, setAblationBusy] = useState(false);
@@ -109,25 +149,39 @@ export function App() {
       position: number | null,
       requestedView: InspectView = "baseline",
       requestedHighlight: string | null = null,
+      requestedDeembed = deembedEnabled,
     ): Promise<InspectPayload> => {
       setInspectBusy(true);
       setInspectError("");
       try {
         const result =
-          requestedView === "baseline" && requestedHighlight === null
+          requestedView === "baseline" &&
+          requestedHighlight === null &&
+          !requestedDeembed
             ? await engine.inspectNode(key, position)
-            : await engine.inspectNode(
-                key,
-                position,
-                requestedView,
-                requestedHighlight,
-              );
+            : requestedDeembed
+              ? await engine.inspectNode(
+                  key,
+                  position,
+                  requestedView,
+                  requestedHighlight,
+                  true,
+                )
+              : await engine.inspectNode(
+                  key,
+                  position,
+                  requestedView,
+                  requestedHighlight,
+                );
         setInspectResult(result);
         setActiveAblation(result.ablation);
         if (result.state === "ready" && result.node) {
           setNodeKey(result.node.key);
           setTokenPosition(result.selected_position);
           setView(result.view);
+          if (requestedDeembed && !result.node.deembeddable) {
+            setDeembedEnabled(false);
+          }
         }
         return result;
       } catch (error) {
@@ -138,7 +192,7 @@ export function App() {
         setInspectBusy(false);
       }
     },
-    [],
+    [deembedEnabled],
   );
 
   async function handleLoad(): Promise<void> {
@@ -154,6 +208,7 @@ export function App() {
       setTokenPosition(null);
       setView("baseline");
       setActiveAblation(null);
+      setDeembedEnabled(false);
       setAblationStatus("");
       setAblationError("");
       setHighlightToken("");
@@ -182,8 +237,9 @@ export function App() {
         setTokenPosition(null);
         setView("baseline");
         setActiveAblation(null);
+        setDeembedEnabled(false);
         setHighlightToken("");
-        await runInspect(null, null, "baseline", null);
+        await runInspect(null, null, "baseline", null, false);
       } else {
         setInspectResult(null);
         setNodeKey(null);
@@ -225,31 +281,38 @@ export function App() {
 
   function handleView(nextView: InspectView): void {
     if (nextView !== "baseline" && !activeAblation) return;
+    const nextDeembed = nextView === "diff" ? false : deembedEnabled;
+    if (!nextDeembed) setDeembedEnabled(false);
     setView(nextView);
     void runInspect(
       effectiveKey,
       tokenPosition,
       nextView,
       highlightToken || null,
+      nextDeembed,
+    ).catch(() => undefined);
+  }
+
+  function handleDeembedChange(enabled: boolean): void {
+    if (!inspectResult?.node?.deembeddable || view === "diff") return;
+    setDeembedEnabled(enabled);
+    void runInspect(
+      effectiveKey,
+      tokenPosition,
+      view,
+      highlightToken || null,
+      enabled,
     ).catch(() => undefined);
   }
 
   async function handleAblate(): Promise<void> {
-    const dimension = Number(ablationDim);
     const width =
       ablationNode === "ffn_hidden"
         ? loadResult?.meta.feed_forward_dim
         : loadResult?.meta.embedding_dim;
-    const validDimension =
-      Number.isInteger(dimension) &&
-      dimension >= 0 &&
-      width !== null &&
-      width !== undefined &&
-      dimension < width;
-    if (!validDimension) {
-      setAblationError(
-        `Dimension must be an integer from 0 through ${(width ?? 1) - 1}.`,
-      );
+    const parsed = parseAblationDimensions(ablationDimsText, width);
+    if (parsed.error) {
+      setAblationError(parsed.error);
       return;
     }
     if (ablationScope === "token" && tokenPosition === null) {
@@ -263,7 +326,7 @@ export function App() {
     try {
       const result = await engine.ablateFeature(
         ablationNode,
-        dimension,
+        parsed.dims,
         ablationMode,
         ablationScope,
         ablationScope === "token" ? tokenPosition : null,
@@ -282,6 +345,7 @@ export function App() {
         tokenPosition,
         "ablated",
         highlightToken || null,
+        deembedEnabled,
       );
     } catch (error) {
       setAblationError(errorMessage(error));
@@ -299,9 +363,10 @@ export function App() {
       const result = await engine.clearAblation();
       setActiveAblation(null);
       setView("baseline");
+      setDeembedEnabled(false);
       setHighlightToken("");
       setAblationStatus(result.status);
-      await runInspect(effectiveKey, tokenPosition, "baseline", null);
+      await runInspect(effectiveKey, tokenPosition, "baseline", null, false);
     } catch (error) {
       setAblationError(errorMessage(error));
     } finally {
@@ -316,6 +381,7 @@ export function App() {
       tokenPosition,
       view,
       highlightToken.trim() || null,
+      deembedEnabled,
     ).catch(() => undefined);
   }
 
@@ -335,13 +401,11 @@ export function App() {
     ablationNode === "ffn_hidden"
       ? loadResult?.meta.feed_forward_dim
       : loadResult?.meta.embedding_dim;
-  const dimensionValue = Number(ablationDim);
-  const dimensionValid =
-    Number.isInteger(dimensionValue) &&
-    dimensionValue >= 0 &&
-    ablationWidth !== null &&
-    ablationWidth !== undefined &&
-    dimensionValue < ablationWidth;
+  const parsedAblation = parseAblationDimensions(
+    ablationDimsText,
+    ablationWidth,
+  );
+  const dimensionValid = parsedAblation.error === "";
 
   return (
     <div className={focused ? "ct-page ct-page-focused" : "ct-page"}>
@@ -520,8 +584,8 @@ export function App() {
           <section className="ct-panel" data-testid="ablation-panel">
             <h2 className="ct-section-label">03 / TEST A FEATURE</h2>
             <p className="ct-muted ct-panel-copy">
-              Remove one activation dimension, rerun the model, and inspect
-              which downstream predictions move.
+              Remove one or more activation dimensions, rerun the model, and
+              inspect which downstream predictions move.
             </p>
             <label className="ct-select-wrap">
               <span className="ct-field-label">Activation node</span>
@@ -541,15 +605,13 @@ export function App() {
             </label>
             <div className="ct-control-row">
               <label className="ct-select-wrap">
-                <span className="ct-field-label">Dimension</span>
+                <span className="ct-field-label">Dimensions</span>
                 <input
                   className="ct-number-input"
-                  type="number"
-                  min={0}
-                  max={ablationWidth ? ablationWidth - 1 : undefined}
-                  step={1}
-                  value={ablationDim}
-                  onChange={(event) => setAblationDim(event.target.value)}
+                  type="text"
+                  inputMode="text"
+                  value={ablationDimsText}
+                  onChange={(event) => setAblationDimsText(event.target.value)}
                   disabled={!hasAnalysis || ablationBusy}
                   data-testid="ablation-dim-input"
                 />
@@ -593,7 +655,7 @@ export function App() {
               </select>
             </label>
             <p className="ct-input-hint">
-              Dimension numbers match the dim index shown when hovering a
+              Enter comma- or space-separated dim indices shown when hovering a
               heatmap. Mean ablation uses the other prompt tokens.
             </p>
             <div className="ct-button-row">
@@ -629,7 +691,8 @@ export function App() {
             >
               {ablationError ||
                 ablationStatus ||
-                "Analyze a prompt, choose a dimension, then ablate it."}
+                "Analyze a prompt, choose one or more dimensions, then ablate " +
+                "them."}
             </p>
           </section>
         </aside>
@@ -822,6 +885,7 @@ export function App() {
                 highlightToken={highlightToken}
                 onHighlightTokenChange={setHighlightToken}
                 onHighlightTokenSubmit={handleHighlightTokenSubmit}
+                onDeembedChange={handleDeembedChange}
               />
             ) : null}
           </section>

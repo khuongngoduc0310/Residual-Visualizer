@@ -42,7 +42,7 @@ from inspection import (
     STREAM_NODES,
     TRACE_ORDER,
     InspectionError,
-    ablation_replacement_value,
+    ablation_replacement_values,
     node_spec,
 )
 from model import ARCHITECTURE_NAME, ModelConfig
@@ -82,7 +82,7 @@ class InspectionSession:
 @dataclass(frozen=True)
 class AblatedResult:
     spec: AblationSpec
-    baseline_value: float
+    baseline_values: list[float]
     analysis: PromptAnalysis
 
 
@@ -412,6 +412,7 @@ def _graph_payload() -> dict:
             "explanation": spec.explanation,
             "normalized": spec.normalized,
             "feature_axis": spec.feature_axis,
+            "deembeddable": spec.key in SPINE_STATES,
         }
         for spec in STREAM_NODES
     ]
@@ -456,6 +457,7 @@ def _node_info_payload(key: str) -> dict:
         "explanation": spec.explanation,
         "normalized": spec.normalized,
         "feature_axis": spec.feature_axis,
+        "deembeddable": key in SPINE_STATES,
         "trace_index": index,
         "trace_count": len(trace),
         "prev_key": trace[index - 1] if index > 0 else None,
@@ -498,11 +500,11 @@ def _ablation_info(result: Optional[AblatedResult]) -> Optional[dict]:
     return {
         "node_key": spec.node_key,
         "node_label": node.label,
-        "dim": spec.dim,
+        "dims": list(spec.dims),
         "mode": spec.mode,
         "scope": spec.scope,
         "position": spec.position,
-        "baseline_value": result.baseline_value,
+        "baseline_values": result.baseline_values,
     }
 
 
@@ -520,6 +522,9 @@ def _ablation_status(
     ablated: PromptAnalysis,
     spec: AblationSpec,
 ) -> tuple[str, Optional[int]]:
+    dim_label = ", ".join(str(dim) for dim in spec.dims)
+    dimension_word = "dimension" if len(spec.dims) == 1 else "dimensions"
+    dimension_verb = "was" if len(spec.dims) == 1 else "were"
     probability_delta = (
         ablated.capture.probabilities - baseline.capture.probabilities
     )
@@ -527,7 +532,7 @@ def _ablation_status(
     strongest_position = int(np.argmax(position_effect))
     if np.any(position_effect > 1e-12):
         return (
-            f"Ablated {spec.node_key} dimension {spec.dim}; strongest "
+            f"Ablated {spec.node_key} {dimension_word} {dim_label}; strongest "
             f"readout effect is at token position {strongest_position}.",
             strongest_position,
         )
@@ -537,11 +542,13 @@ def _ablation_status(
         rows = values
     else:
         rows = values[spec.position : spec.position + 1]
-    inactive = bool(np.all(np.abs(rows[:, spec.dim]) <= 1e-12))
+    inactive = bool(np.all(np.abs(rows[:, list(spec.dims)]) <= 1e-12))
     if inactive:
         return (
             f"Ablation produced no measurable change: {spec.node_key} "
-            f"dimension {spec.dim} was inactive at the ablated token(s).",
+            f"{dimension_word} {dim_label} {dimension_verb} inactive at the "
+            "ablated "
+            "token(s).",
             strongest_position,
         )
     return (
@@ -554,12 +561,12 @@ def _ablation_status(
 def ablate_feature_payload(
     manager: ModelManager,
     node_key: str,
-    dim: int,
+    dims: list[int],
     mode: str,
     scope: str,
     position: Optional[int] = None,
 ) -> dict:
-    """Ablate one feature and store a full comparison capture."""
+    """Ablate one or more dimensions and store a full comparison capture."""
     try:
         with manager.use_loaded_state() as state:
             session = manager.inspection_session
@@ -567,13 +574,13 @@ def ablate_feature_payload(
                 raise AnalysisError("Analyze a prompt before ablating a feature")
             spec = AblationSpec(
                 node_key=node_key,
-                dim=dim,
+                dims=dims,
                 mode=mode,
                 scope=scope,
                 position=position,
             )
             baseline_values = session.analysis.capture.locations[spec.node_key]
-            baseline_value = ablation_replacement_value(
+            replacement_values = ablation_replacement_values(
                 baseline_values,
                 spec,
             )
@@ -582,7 +589,7 @@ def ablate_feature_payload(
                 ablated = ablate_analysis(token_ids, state.checkpoint, spec)
             result = AblatedResult(
                 spec=spec,
-                baseline_value=baseline_value,
+                baseline_values=replacement_values,
                 analysis=ablated,
             )
             manager.store_ablation(result)
@@ -628,6 +635,84 @@ def _position_effects(
         }
         for token in analysis.tokens
     ]
+
+
+def _deembed_probabilities(
+    values: np.ndarray,
+    position: int,
+    checkpoint: LoadedCheckpoint,
+) -> np.ndarray:
+    projection = checkpoint.model.get_layer("token_probabilities")
+    weights = projection.get_weights()
+    kernel = np.asarray(weights[0])
+    bias = (
+        np.asarray(weights[1])
+        if len(weights) > 1
+        else np.zeros(kernel.shape[1], dtype=kernel.dtype)
+    )
+    vector = np.asarray(values[position])
+    if vector.shape != (kernel.shape[0],):
+        raise InspectionError(
+            "The selected residual state does not match the output projection "
+            "width."
+        )
+    logits = np.matmul(vector, kernel) + bias
+    shifted = logits - np.max(logits)
+    probabilities = np.exp(shifted)
+    return probabilities / np.sum(probabilities)
+
+
+def _populate_deembed_payload(
+    payload: dict,
+    checkpoint: LoadedCheckpoint,
+    node_label: str,
+    baseline_analysis: PromptAnalysis,
+    ablated_analysis: Optional[PromptAnalysis],
+    position: int,
+    token_label: str,
+    view: str,
+    highlight_token: Optional[str],
+) -> None:
+    baseline_probabilities = _deembed_probabilities(
+        baseline_analysis.capture.locations[payload["node"]["key"]],
+        position,
+        checkpoint,
+    )
+    if view == "ablated" and ablated_analysis is not None:
+        ablated_probabilities = _deembed_probabilities(
+            ablated_analysis.capture.locations[payload["node"]["key"]],
+            position,
+            checkpoint,
+        )
+        compare, highlighted_id = _readout_compare(
+            baseline_probabilities[None, :],
+            ablated_probabilities[None, :],
+            0,
+            checkpoint,
+            highlight_token,
+        )
+        payload["deembed_movers"] = compare["movers"]
+        payload["deembed_figure"] = _figure_payload(
+            render_readout_delta(
+                compare["movers"],
+                f"{node_label} at {token_label}",
+                highlighted_token_id=highlighted_id,
+            )
+        )
+        payload["deembed_present"] = True
+        return
+
+    rows = _readout_rows(
+        baseline_probabilities[None, :],
+        0,
+        checkpoint,
+        NEXT_TOKEN_TOP_K,
+    )
+    payload["deembed_top"] = rows
+    payload["deembed_figure"] = _figure_payload(
+        render_readout_topk(rows, f"{node_label} at {token_label}")
+    )
+    payload["deembed_present"] = True
 
 
 def _readout_compare(
@@ -731,6 +816,10 @@ def _awaiting_payload(
         "readout_compare": None,
         "readout_compare_figure": None,
         "position_effects": [],
+        "deembed_present": False,
+        "deembed_top": [],
+        "deembed_movers": [],
+        "deembed_figure": None,
     }
 
 
@@ -740,6 +829,7 @@ def inspect_node_payload(
     token_position: Optional[int] = None,
     view: str = "baseline",
     highlight_token: Optional[str] = None,
+    deembed: bool = False,
 ) -> dict:
     """Render the chosen stream node from stored captures; never reruns the
     model."""
@@ -862,6 +952,19 @@ def inspect_node_payload(
             render_pattern_heatmap(values, token_labels, position)
         )
         return payload
+
+    if deembed and key in SPINE_STATES and view != "diff":
+        _populate_deembed_payload(
+            payload,
+            manager.loaded_state.checkpoint,
+            spec.label,
+            baseline_analysis,
+            ablated_analysis,
+            position,
+            token_labels[position],
+            view,
+            highlight_token,
+        )
 
     tile_rows, tile_cols = grid_shape(width)
     payload["tile"] = {
@@ -1074,7 +1177,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
 
         def ablate_endpoint(
             node_key: str,
-            dim: int,
+            dims: list[int],
             mode: str,
             scope: str,
             position: Optional[int] = None,
@@ -1082,7 +1185,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
             return ablate_feature_payload(
                 manager,
                 node_key,
-                dim,
+                dims,
                 mode,
                 scope,
                 position,
@@ -1096,6 +1199,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
             token_position: Optional[int] = None,
             view: str = "baseline",
             highlight_token: Optional[str] = None,
+            deembed: bool = False,
         ) -> dict:
             return inspect_node_payload(
                 manager,
@@ -1103,6 +1207,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
                 token_position,
                 view,
                 highlight_token,
+                deembed,
             )
 
         def get_options(_unused: str = "") -> dict:

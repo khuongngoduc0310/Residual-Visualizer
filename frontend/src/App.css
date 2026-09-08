@@ -190,7 +190,7 @@ button {
 }
 
 .ct-number-input {
-  width: 108px;
+  width: 160px;
   border: 1px solid var(--line-soft);
   border-radius: 8px;
   padding: 7px 10px;
@@ -613,6 +613,20 @@ button {
   font-size: 11px;
   color: var(--muted-2);
   margin: 8px 4px 0;
+}
+
+.ct-deembed-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 12px 4px 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ct-deembed-control input {
+  accent-color: var(--blue-700);
 }
 
 .ct-readout-row {

@@ -52,6 +52,13 @@ function graphNode(
     explanation: `${label} explanation.`,
     normalized: kind === "ln",
     feature_axis: featureAxis,
+    deembeddable: [
+      "embedding",
+      "attention_residual",
+      "attention_norm",
+      "ffn_residual",
+      "output_norm",
+    ].includes(key),
     trace_index: index,
     trace_count: trace.length,
     prev_key: index > 0 ? trace[index - 1] : null,
@@ -129,6 +136,7 @@ function nodeInfo(key: string): GraphNode {
 function inspectFixture(
   key: string | null,
   view: "baseline" | "ablated" | "diff" = "baseline",
+  deembed = false,
 ): InspectPayload {
   const nodeKey = key ?? "output_norm";
   const node = nodeInfo(nodeKey);
@@ -143,11 +151,11 @@ function inspectFixture(
         : {
             node_key: "ffn_hidden",
             node_label: "FFN hidden (ReLU)",
-            dim: 0,
+            dims: [0, 2],
             mode: "zero",
             scope: "token",
             position: 1,
-            baseline_value: 0,
+            baseline_values: [0, 0],
           },
     node,
     selected_position: 1,
@@ -179,6 +187,24 @@ function inspectFixture(
         ? null
         : { data: [{}], layout: {} },
     position_effects: [],
+    deembed_present: deembed,
+    deembed_top: deembed && view === "baseline"
+      ? [{ rank: 1, text: "world", token_id: 4, probability: 0.4 }]
+      : [],
+    deembed_movers:
+      deembed && view === "ablated"
+        ? [
+            {
+              token_id: 4,
+              text: "world",
+              baseline_probability: 0.4,
+              ablated_probability: 0.2,
+              delta: -0.2,
+              highlighted: false,
+            },
+          ]
+        : [],
+    deembed_figure: deembed ? { data: [{}], layout: {} } : null,
   };
 }
 
@@ -189,15 +215,15 @@ beforeEach(() => {
   engine.analyzePrompt.mockResolvedValue(analyzeFixture);
   engine.ablateFeature.mockResolvedValue({
     ok: true,
-    status: "Ablated ffn_hidden dimension 0.",
+    status: "Ablated ffn_hidden dimensions 0, 2.",
     ablation: {
       node_key: "ffn_hidden",
       node_label: "FFN hidden (ReLU)",
-      dim: 0,
+      dims: [0, 2],
       mode: "zero",
       scope: "token",
       position: 1,
-      baseline_value: 0,
+      baseline_values: [0, 0],
     },
     strongest_position: 1,
   });
@@ -207,7 +233,9 @@ beforeEach(() => {
       key: string | null,
       _position: number | null,
       view: "baseline" | "ablated" | "diff" = "baseline",
-    ) => inspectFixture(key, view),
+      _highlightToken: string | null = null,
+      deembed = false,
+    ) => inspectFixture(key, view, deembed),
   );
 });
 
@@ -390,12 +418,15 @@ describe("App", () => {
       ),
     );
 
+    const dimensions = screen.getByTestId("ablation-dim-input");
+    await user.clear(dimensions);
+    await user.type(dimensions, "0, 2, 2");
     await user.click(screen.getByTestId("ablate-button"));
 
     await waitFor(() =>
       expect(engine.ablateFeature).toHaveBeenCalledWith(
         "ffn_hidden",
-        0,
+        [0, 2],
         "zero",
         "token",
         1,
@@ -409,6 +440,30 @@ describe("App", () => {
       "ablated",
       null,
     );
+  });
+
+  it("projects a residual state through the output matrix", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "Load model" }));
+    await user.type(screen.getByLabelText(/Prompt/), "hello ,");
+    await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
+    await waitFor(() => screen.getByTestId("deembed-toggle"));
+
+    await user.click(screen.getByTestId("deembed-toggle"));
+
+    await waitFor(() =>
+      expect(engine.inspectNode).toHaveBeenLastCalledWith(
+        "output_norm",
+        1,
+        "baseline",
+        null,
+        true,
+      ),
+    );
+    expect(await screen.findByTestId("deembed-results")).toBeInTheDocument();
+    expect(screen.getByTestId("deembed-table")).toHaveTextContent("world");
   });
 
   it("shows readout movers and highlights a hypothesized token", async () => {

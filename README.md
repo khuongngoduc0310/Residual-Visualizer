@@ -190,16 +190,26 @@ horizontal bars and a per-token entropy strip showing uncertainty across the
 whole prompt. It is derived from the captured probabilities, whose ordering
 matches the pre-softmax logits.
 
+For a logit-lens probe, select a residual-stream node and enable **De-embed at
+this token**. The selected residual vector is multiplied by the same final
+output matrix used to produce logits, then softmaxed to show the next-token
+distribution that this intermediate state implies. The five residual states
+from the embedding input through the block output support this probe;
+`output_norm` should match the normal Readout. With an ablation active, the
+ablated view shows the projected probability movements relative to baseline.
+
 Captured tensors live in memory for the session only. They are cleared when a
 new checkpoint is loaded, replaced by a fresh analysis, or dropped after a
 failed analysis.
 
 ## Validate A Feature By Ablation
 
-After analyzing a prompt, use **Test a feature** to remove one activation
-dimension and rerun the model. Choose an ablatable node, enter the dimension
-index shown when hovering its heatmap, choose the current token or all prompt
-tokens, and choose either **Zero activation** or **Leave-one-out token mean**.
+After analyzing a prompt, use **Test a feature** to remove one or more
+activation dimensions and rerun the model. Choose an ablatable node, enter
+comma- or space-separated dimension indices shown when hovering its heatmap,
+choose the current token or all prompt tokens, and choose either **Zero
+activation** or **Leave-one-out token mean**. Duplicate indices are silently
+deduplicated, and a new ablation replaces the previous ablated capture.
 The baseline capture remains available while the ablated capture is stored in
 memory for comparison.
 
@@ -207,9 +217,9 @@ The initial ablatable nodes are `ffn_hidden`, `embedding`,
 `attention_residual`, `attention_norm`, `ffn_residual`, and `output_norm`.
 `ffn_hidden` dimensions use the configured feed-forward width; the other
 nodes use the configured model width. Zero ablation removes the selected
-value. Mean ablation replaces it with the same feature's mean at the other
-prompt positions for a token-scoped test, or its full prompt mean for an
-all-token test. A one-token prompt cannot use token-scoped mean ablation.
+values. Mean ablation replaces each selected value with that dimension's mean
+at the other prompt positions for a token-scoped test, or its full prompt mean
+for an all-token test. A one-token prompt cannot use token-scoped mean ablation.
 
 Use the **Baseline**, **Ablated**, and **Difference** views to inspect the
 causal path. The Readout view compares the top predictions and ranks the
@@ -226,7 +236,6 @@ your hypothesis predicts, ideally across more than one prompt. A feature that
 is already zero at the ablated positions will produce no change. Ablating a
 dimension before a layer norm can also spread the difference across the
 following normalized vector because normalization rescales the whole token.
-
 
 ## Checkpoint Folder
 

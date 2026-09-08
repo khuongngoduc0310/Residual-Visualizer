@@ -1,6 +1,7 @@
 import json
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import tensorflow as tf
 
@@ -300,7 +301,7 @@ def test_ablation_requires_a_loaded_analysis():
     payload = app.ablate_feature_payload(
         manager,
         "ffn_hidden",
-        0,
+        [0],
         "zero",
         "all",
         None,
@@ -316,7 +317,7 @@ def test_ablation_stores_a_capture_and_exposes_comparisons(tmp_path):
     result = app.ablate_feature_payload(
         manager,
         "ffn_hidden",
-        0,
+        [0, 2],
         "zero",
         "token",
         1,
@@ -324,7 +325,8 @@ def test_ablation_stores_a_capture_and_exposes_comparisons(tmp_path):
 
     assert result["ok"]
     assert manager.inspection_session.ablated is not None
-    assert result["ablation"]["dim"] == 0
+    assert result["ablation"]["dims"] == [0, 2]
+    assert len(result["ablation"]["baseline_values"]) == 2
 
     diff = app.inspect_node_payload(
         manager,
@@ -361,7 +363,7 @@ def test_ablation_stores_a_capture_and_exposes_comparisons(tmp_path):
 
 def test_clearing_ablation_keeps_the_baseline_capture(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
-    app.ablate_feature_payload(manager, "output_norm", 0, "zero", "all")
+    app.ablate_feature_payload(manager, "output_norm", [0], "zero", "all")
     assert manager.inspection_session.ablated is not None
 
     result = app.clear_ablation_payload(manager)
@@ -371,6 +373,72 @@ def test_clearing_ablation_keeps_the_baseline_capture(tmp_path):
     assert manager.inspection_session.ablated is None
     baseline = app.inspect_node_payload(manager, "output_norm", 0, "baseline")
     assert baseline["view"] == "baseline"
+
+
+def test_deembedding_projects_residual_state_through_output_matrix(tmp_path):
+    manager, _ = analyze_fixture(tmp_path)
+
+    payload = app.inspect_node_payload(
+        manager,
+        "output_norm",
+        1,
+        "baseline",
+        None,
+        True,
+    )
+
+    assert payload["node"]["deembeddable"] is True
+    assert payload["deembed_present"] is True
+    assert payload["deembed_figure"]["data"]
+    layer = manager.loaded_state.checkpoint.model.get_layer("token_probabilities")
+    kernel, bias = layer.get_weights()
+    vector = manager.inspection_session.analysis.capture.locations[
+        "output_norm"
+    ][1]
+    logits = vector @ kernel + bias
+    logits -= np.max(logits)
+    probabilities = np.exp(logits)
+    probabilities /= np.sum(probabilities)
+    assert payload["deembed_top"][0]["token_id"] == int(np.argmax(probabilities))
+    assert payload["deembed_top"][0]["probability"] == pytest.approx(
+        float(np.max(probabilities)),
+        rel=1e-5,
+    )
+    np.testing.assert_allclose(
+        manager.inspection_session.analysis.capture.probabilities[1],
+        probabilities,
+        rtol=1e-5,
+        atol=1e-6,
+    )
+
+    hidden = app.inspect_node_payload(
+        manager,
+        "ffn_hidden",
+        1,
+        "baseline",
+        None,
+        True,
+    )
+    assert hidden["node"]["deembeddable"] is False
+    assert hidden["deembed_present"] is False
+
+
+def test_deembedding_compares_baseline_and_ablated_residual_states(tmp_path):
+    manager, _ = analyze_fixture(tmp_path)
+    app.ablate_feature_payload(manager, "ffn_hidden", [0], "zero", "token", 1)
+
+    payload = app.inspect_node_payload(
+        manager,
+        "ffn_residual",
+        1,
+        "ablated",
+        None,
+        True,
+    )
+
+    assert payload["deembed_present"] is True
+    assert payload["deembed_movers"]
+    assert payload["deembed_figure"]["data"]
 
 
 def test_non_baseline_view_requires_an_active_ablation(tmp_path):

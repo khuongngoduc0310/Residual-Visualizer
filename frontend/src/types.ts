@@ -24,6 +24,7 @@ export interface GraphNode {
   explanation: string;
   normalized: boolean;
   feature_axis: boolean;
+  deembeddable: boolean;
   trace_index: number;
   trace_count: number;
   prev_key: string | null;
@@ -144,11 +145,11 @@ export type InspectView = "baseline" | "ablated" | "diff";
 export interface AblationInfo {
   node_key: string;
   node_label: string;
-  dim: number;
+  dims: number[];
   mode: "zero" | "mean";
   scope: "token" | "all";
   position: number | null;
-  baseline_value: number;
+  baseline_values: number[];
 }
 
 export interface MoverRow {
@@ -195,6 +196,10 @@ export interface InspectPayload {
   readout_compare: ReadoutCompare | null;
   readout_compare_figure: FigureSpec | null;
   position_effects: PositionEffect[];
+  deembed_present: boolean;
+  deembed_top: NextTokenRow[];
+  deembed_movers: MoverRow[];
+  deembed_figure: FigureSpec | null;
 }
 
 export interface AblationOperationPayload {

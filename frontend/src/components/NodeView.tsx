@@ -7,6 +7,7 @@ interface NodeViewProps {
   highlightToken: string;
   onHighlightTokenChange: (value: string) => void;
   onHighlightTokenSubmit: () => void;
+  onDeembedChange: (enabled: boolean) => void;
 }
 
 export function NodeView({
@@ -15,6 +16,7 @@ export function NodeView({
   highlightToken,
   onHighlightTokenChange,
   onHighlightTokenSubmit,
+  onDeembedChange,
 }: NodeViewProps) {
   const kind = inspect.node?.kind ?? null;
   const scale = inspect.scale;
@@ -47,6 +49,85 @@ export function NodeView({
             : ""}
           {" · scroll to zoom"}
         </p>
+      )}
+
+      {inspect.node?.deembeddable && (
+        <label className="ct-deembed-control">
+          <input
+            type="checkbox"
+            checked={inspect.deembed_present}
+            onChange={(event) => onDeembedChange(event.target.checked)}
+            disabled={inspect.view === "diff"}
+            data-testid="deembed-toggle"
+          />
+          <span>
+            De-embed at this token
+            {inspect.view === "diff" ? " (available in baseline or ablated view)" : ""}
+          </span>
+        </label>
+      )}
+
+      {inspect.deembed_present && (
+        <section className="ct-ablation-results" data-testid="deembed-results">
+          <div className="ct-panel-head">
+            <div>
+              <h3 className="ct-subheading">Projected next-token readout</h3>
+              <p className="ct-muted">
+                This residual state is projected through the model&apos;s final
+                output matrix.
+              </p>
+            </div>
+          </div>
+          <div className="ct-readout-row">
+            <div className="ct-chart-box">
+              <PlotlyFigure
+                figure={inspect.deembed_figure}
+                className="ct-plot ct-plot-side"
+                data-testid="deembed-plot"
+              />
+            </div>
+            <div className="ct-readout-table">
+              <h3 className="ct-subheading">
+                {inspect.deembed_movers.length > 0
+                  ? "Projected probability movement"
+                  : "Top projected next tokens"}
+              </h3>
+              <div className="ct-table-wrap">
+                <table className="ct-table" data-testid="deembed-table">
+                  <thead>
+                    <tr>
+                      <th>Rank</th>
+                      <th>Token</th>
+                      <th>ID</th>
+                      <th>
+                        {inspect.deembed_movers.length > 0 ? "Delta" : "Probability"}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {inspect.deembed_movers.length > 0
+                      ? inspect.deembed_movers.map((row, index) => (
+                          <tr key={row.token_id}>
+                            <td>{index + 1}</td>
+                            <td>{row.text}</td>
+                            <td>{row.token_id}</td>
+                            <td>{row.delta.toFixed(6)}</td>
+                          </tr>
+                        ))
+                      : inspect.deembed_top.map((row) => (
+                          <tr key={row.rank}>
+                            <td>{row.rank}</td>
+                            <td>{row.text}</td>
+                            <td>{row.token_id}</td>
+                            <td>{row.probability.toFixed(6)}</td>
+                          </tr>
+                        ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
       )}
 
       {kind === "readout" ? (
