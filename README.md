@@ -93,17 +93,27 @@ folder path and press **Load Model**. The app validates all three files before
 showing the model details and reports CUDA GPU or CPU based on TensorFlow's
 actual device visibility.
 
-For frontend development, run the engine and the Vite dev server together:
+For iterative development, keep one backend process alive and edit freely:
 
 ```powershell
-python app.py
+python dev_server.py
+```
+
+`dev_server.py` runs the same engine as `python app.py` and restarts it
+automatically whenever a tracked Python source file changes, so you never
+re-run the server while editing Python. Edits under `.venv/`, `frontend/`,
+`tests/`, `checkpoints/`, and `.git/` are ignored. For UI work, also run the
+Vite dev server in a second terminal:
+
+```powershell
 cd frontend
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`; Vite proxies the model endpoints to the engine on
-`127.0.0.1:7860`. The dev server hot-reloads frontend changes without touching
-Python or the model.
+Open `http://127.0.0.1:5173`; Vite hot-reloads React/CSS on every save and
+proxies the model endpoints to the engine on `127.0.0.1:7860`. A backend
+restart drops the in-memory model, so after an auto-restart press **Load
+Model** again in the browser (the checkpoint path stays pre-filled).
 
 For a quick UI check, use a desktop browser width of at least 1280px. Verify
 that expanding the model diagram shows one residual line with the attention
@@ -386,8 +396,9 @@ runtime contract changes; older TensorFlow 2.10 checkpoints are rejected.
   error. Prompts are rejected rather than silently truncated.
 - **Frontend not built:** `python app.py` prints a notice when
   `frontend/dist` is missing. Build it once with `npm run build` inside
-  `frontend/`, then start the app again. For iterative UI work, use `npm run
-  dev` against a running `python app.py`.
+  `frontend/`, then start the app again. For iterative work, use
+  `python dev_server.py` (auto-restarts on Python edits) plus `npm run dev` in
+  `frontend/` for the UI.
 - **TensorFlow startup warnings:** oneDNN, CPU feature, and Keras deprecation
   messages are informational unless they are followed by an actual exception.
 
