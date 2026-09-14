@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Plotly, {
   type PlotlyClickPoint,
   type PlotlyHTMLElement,
@@ -35,17 +35,21 @@ export function PlotlyFigure({
 }: PlotlyFigureProps) {
   const hostRef = useRef<PlotlyHTMLElement | null>(null);
   const selectRef = useRef(onSelectPosition);
+  const [renderError, setRenderError] = useState("");
   selectRef.current = onSelectPosition;
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
+    let cancelled = false;
 
     if (!figure) {
       Plotly.purge(host);
+      setRenderError("");
       return;
     }
 
+    setRenderError("");
     const width = host.clientWidth || DEFAULT_WIDTH;
     const height = host.clientHeight || DEFAULT_HEIGHT;
     const layout = { ...figure.layout, width, height };
@@ -56,11 +60,14 @@ export function PlotlyFigure({
       modeBarButtonsToRemove: ["lasso2d", "select2d"],
     };
 
-    Plotly.react(host, figure.data, layout, config).catch((reason: unknown) => {
-      // A transient render failure should not take down the app, but it must
-      // not stay invisible either.
-      console.warn("Plotly render failed", reason);
-    });
+    Plotly.react(host, figure.data, layout, config)
+      .then(() => {
+        if (!cancelled) setRenderError("");
+      })
+      .catch((reason: unknown) => {
+        console.warn("Plotly render failed", reason);
+        if (!cancelled) setRenderError("Chart could not be rendered.");
+      });
     host.removeAllListeners("plotly_click");
     host.on("plotly_click", (event) => {
       const first = event.points[0];
@@ -68,6 +75,9 @@ export function PlotlyFigure({
       const position = positionFromPoint(first);
       if (position !== null) selectRef.current?.(position);
     });
+    return () => {
+      cancelled = true;
+    };
   }, [figure]);
 
   useEffect(() => {
@@ -78,12 +88,19 @@ export function PlotlyFigure({
   }, []);
 
   return (
-    <div
-      ref={(element) => {
-        hostRef.current = element as PlotlyHTMLElement | null;
-      }}
-      className={className}
-      data-testid={testId}
-    />
+    <>
+      <div
+        ref={(element) => {
+          hostRef.current = element as PlotlyHTMLElement | null;
+        }}
+        className={className}
+        data-testid={testId}
+      />
+      {renderError ? (
+        <p className="ct-status ct-status-error" role="alert">
+          {renderError}
+        </p>
+      ) : null}
+    </>
   );
 }

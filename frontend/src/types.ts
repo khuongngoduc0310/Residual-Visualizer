@@ -200,6 +200,8 @@ export interface InspectPayload {
   deembed_top: NextTokenRow[];
   deembed_movers: MoverRow[];
   deembed_figure: FigureSpec | null;
+  deembed_has_effect: boolean | null;
+  deembed_state_changed: boolean | null;
 }
 
 export interface AblationOperationPayload {

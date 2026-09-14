@@ -636,6 +636,10 @@ button {
   margin-top: 12px;
 }
 
+.ct-readout-row-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .ct-ablation-results {
   margin-top: 14px;
   border-top: 1px solid var(--line-soft);

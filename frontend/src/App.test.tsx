@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { App, DEFAULT_CHECKPOINT } from "./App";
+import { NodeView } from "./components/NodeView";
 import type {
   AnalyzePayload,
   GraphNode,
@@ -31,6 +32,7 @@ vi.mock("./api/client", () => engine);
 const nodeKeys = [
   "embedding",
   "attention_residual",
+  "ffn_residual",
   "output_norm",
   "readout",
 ];
@@ -42,7 +44,14 @@ function graphNode(
   family: GraphNode["family"],
   featureAxis = true,
 ): GraphNode {
-  const trace = ["embedding", "attention_update", "attention_residual", "output_norm", "readout"];
+  const trace = [
+    "embedding",
+    "attention_update",
+    "attention_residual",
+    "ffn_residual",
+    "output_norm",
+    "readout",
+  ];
   const index = trace.indexOf(key);
   return {
     key,
@@ -72,11 +81,12 @@ const optionsFixture: OptionsPayload = {
       graphNode("embedding", "Residual stream input", "stream", "stream_raw"),
       graphNode("attention_update", "Attention output → residual", "update", "updates"),
       graphNode("attention_residual", "Residual stream after attention", "stream", "stream_raw"),
+      graphNode("ffn_residual", "Residual stream after FFN", "stream", "stream_raw"),
       graphNode("output_norm", "Layer norm block output", "ln", "stream_norm"),
       graphNode("readout", "Readout probabilities", "readout", "readout", false),
     ],
-    spine: ["embedding", "attention_residual", "output_norm"],
-    spine_links: ["attention-add", "layer-norm", "readout"],
+    spine: ["embedding", "attention_residual", "ffn_residual", "output_norm"],
+    spine_links: ["attention-add", "ffn-add", "layer-norm", "readout"],
     branches: [],
     components: [],
     trace: nodeKeys,
@@ -89,6 +99,12 @@ const optionsFixture: OptionsPayload = {
       label: "FFN hidden (ReLU)",
       kind: "hidden",
       family: "hidden",
+    },
+    {
+      key: "ffn_residual",
+      label: "Residual stream after FFN",
+      kind: "stream",
+      family: "stream_raw",
     },
   ],
 };
@@ -149,8 +165,11 @@ function inspectFixture(
       view === "baseline"
         ? null
         : {
-            node_key: "ffn_hidden",
-            node_label: "FFN hidden (ReLU)",
+            node_key: nodeKey === "ffn_residual" ? "ffn_residual" : "ffn_hidden",
+            node_label:
+              nodeKey === "ffn_residual"
+                ? "Residual stream after FFN"
+                : "FFN hidden (ReLU)",
             dims: [0, 2],
             mode: "zero",
             scope: "token",
@@ -188,8 +207,15 @@ function inspectFixture(
         : { data: [{}], layout: {} },
     position_effects: [],
     deembed_present: deembed,
-    deembed_top: deembed && view === "baseline"
-      ? [{ rank: 1, text: "world", token_id: 4, probability: 0.4 }]
+    deembed_top: deembed
+      ? [
+          {
+            rank: 1,
+            text: "world",
+            token_id: 4,
+            probability: view === "ablated" ? 0.2 : 0.4,
+          },
+        ]
       : [],
     deembed_movers:
       deembed && view === "ablated"
@@ -205,6 +231,8 @@ function inspectFixture(
           ]
         : [],
     deembed_figure: deembed ? { data: [{}], layout: {} } : null,
+    deembed_has_effect: deembed && view === "ablated" ? true : null,
+    deembed_state_changed: deembed && view === "ablated" ? true : null,
   };
 }
 
@@ -466,6 +494,67 @@ describe("App", () => {
     expect(screen.getByTestId("deembed-table")).toHaveTextContent("world");
   });
 
+  it("keeps projected predictions visible when ablating the de-embedded node", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "Load model" }));
+    await user.type(screen.getByLabelText(/Prompt/), "hello ,");
+    await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
+
+    const ffnResidualChip = (await screen.findByTestId("node-strip")).querySelector(
+      '[data-node="ffn_residual"]',
+    );
+    expect(ffnResidualChip).not.toBeNull();
+    await user.click(ffnResidualChip as Element);
+    await waitFor(() => screen.getByTestId("deembed-toggle"));
+    await user.click(screen.getByTestId("deembed-toggle"));
+    await waitFor(() =>
+      expect(engine.inspectNode).toHaveBeenLastCalledWith(
+        "ffn_residual",
+        1,
+        "baseline",
+        null,
+        true,
+      ),
+    );
+
+    await user.selectOptions(
+      screen.getByLabelText("Activation node"),
+      "ffn_residual",
+    );
+    await user.click(screen.getByTestId("ablate-button"));
+
+    await waitFor(() =>
+      expect(engine.ablateFeature).toHaveBeenCalledWith(
+        "ffn_residual",
+        [0],
+        "zero",
+        "token",
+        1,
+      ),
+    );
+    expect(engine.inspectNode).toHaveBeenLastCalledWith(
+      "ffn_residual",
+      1,
+      "ablated",
+      null,
+      true,
+    );
+    expect(screen.getByTestId("node-label")).toHaveTextContent(
+      "Residual stream after FFN",
+    );
+    expect(await screen.findByTestId("deembed-table")).toHaveTextContent(
+      "world",
+    );
+    expect(screen.getByTestId("deembed-comparison-table")).toHaveTextContent(
+      "Baseline",
+    );
+    expect(screen.getByTestId("deembed-comparison-table")).toHaveTextContent(
+      "Ablated",
+    );
+  });
+
   it("shows readout movers and highlights a hypothesized token", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -496,5 +585,59 @@ describe("App", () => {
         "world",
       ),
     );
+  });
+});
+
+describe("NodeView", () => {
+  it("explains an unchanged ablated de-embed result without hiding predictions", () => {
+    const inspect = {
+      ...inspectFixture("ffn_residual", "ablated", true),
+      deembed_figure: null,
+      deembed_movers: [],
+      deembed_has_effect: false,
+      deembed_state_changed: false,
+    };
+
+    render(
+      <NodeView
+        inspect={inspect}
+        onSelectPosition={vi.fn()}
+        highlightToken=""
+        onHighlightTokenChange={vi.fn()}
+        onHighlightTokenSubmit={vi.fn()}
+        onDeembedChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("deembed-no-effect")).toHaveTextContent(
+      "selected residual state did not change",
+    );
+    expect(screen.getByTestId("deembed-table")).toHaveTextContent("world");
+    expect(screen.queryByTestId("deembed-plot")).not.toBeInTheDocument();
+  });
+
+  it("distinguishes a changed residual with no projected probability effect", () => {
+    const inspect = {
+      ...inspectFixture("ffn_residual", "ablated", true),
+      deembed_figure: null,
+      deembed_has_effect: false,
+      deembed_state_changed: true,
+    };
+
+    render(
+      <NodeView
+        inspect={inspect}
+        onSelectPosition={vi.fn()}
+        highlightToken=""
+        onHighlightTokenChange={vi.fn()}
+        onHighlightTokenSubmit={vi.fn()}
+        onDeembedChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("deembed-no-effect")).toHaveTextContent(
+      "residual state changed",
+    );
+    expect(screen.getByTestId("deembed-table")).toHaveTextContent("world");
   });
 });

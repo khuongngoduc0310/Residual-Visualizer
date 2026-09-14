@@ -222,14 +222,17 @@ def _populate_deembed_payload(
     view: str,
     highlight_token: Optional[str],
 ) -> None:
+    node_key = payload["node"]["key"]
+    baseline_values = baseline_analysis.capture.locations[node_key]
     baseline_probabilities = _deembed_probabilities(
-        baseline_analysis.capture.locations[payload["node"]["key"]],
+        baseline_values,
         position,
         checkpoint,
     )
     if view == "ablated" and ablated_analysis is not None:
+        ablated_values = ablated_analysis.capture.locations[node_key]
         ablated_probabilities = _deembed_probabilities(
-            ablated_analysis.capture.locations[payload["node"]["key"]],
+            ablated_values,
             position,
             checkpoint,
         )
@@ -240,13 +243,25 @@ def _populate_deembed_payload(
             checkpoint,
             highlight_token,
         )
+        payload["deembed_top"] = compare["ablated_top"]
         payload["deembed_movers"] = compare["movers"]
-        payload["deembed_figure"] = _figure_payload(
-            render_readout_delta(
-                compare["movers"],
-                f"{node_label} at {token_label}",
-                highlighted_token_id=highlighted_id,
+        payload["deembed_has_effect"] = compare["has_effect"]
+        payload["deembed_state_changed"] = bool(
+            np.any(
+                np.abs(ablated_values[position] - baseline_values[position])
+                > 1e-12
             )
+        )
+        payload["deembed_figure"] = (
+            _figure_payload(
+                render_readout_delta(
+                    compare["movers"],
+                    f"{node_label} at {token_label}",
+                    highlighted_token_id=highlighted_id,
+                )
+            )
+            if compare["has_effect"]
+            else None
         )
         payload["deembed_present"] = True
         return
@@ -359,6 +374,8 @@ def _awaiting_payload(
         "deembed_top": [],
         "deembed_movers": [],
         "deembed_figure": None,
+        "deembed_has_effect": None,
+        "deembed_state_changed": None,
     }
 
 

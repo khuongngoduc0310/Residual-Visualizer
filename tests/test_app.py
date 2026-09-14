@@ -487,6 +487,52 @@ def test_deembedding_compares_baseline_and_ablated_residual_states(tmp_path):
     assert payload["deembed_figure"]["data"]
 
 
+def test_deembedding_same_ablated_residual_keeps_projected_predictions(tmp_path):
+    manager, _ = analyze_fixture(tmp_path)
+    position = 1
+    checkpoint = manager.loaded_state.checkpoint
+    baseline_values = manager.inspection_session.analysis.capture.locations[
+        "ffn_residual"
+    ]
+    projection = checkpoint.model.get_layer("token_probabilities")
+    kernel = projection.get_weights()[0]
+    scores = np.abs(baseline_values[position]) * np.ptp(kernel, axis=1)
+    dimension = int(np.argmax(scores))
+    assert scores[dimension] > 1e-12
+
+    result = engine.ablate_feature_payload(
+        manager,
+        "ffn_residual",
+        [dimension],
+        "zero",
+        "token",
+        position,
+    )
+    payload = inspection_views.inspect_node_payload(
+        manager,
+        "ffn_residual",
+        position,
+        "ablated",
+        None,
+        True,
+    )
+
+    assert result["ok"]
+    assert manager.inspection_session.ablated.analysis.capture.locations[
+        "ffn_residual"
+    ][position, dimension] == 0.0
+    assert payload["deembed_present"] is True
+    assert payload["deembed_state_changed"] is True
+    assert payload["deembed_has_effect"] is True
+    assert payload["deembed_top"]
+    assert payload["deembed_movers"]
+    assert payload["deembed_figure"]["data"]
+    assert all(
+        np.isfinite(row["probability"]) for row in payload["deembed_top"]
+    )
+    assert any(abs(row["delta"]) > 1e-12 for row in payload["deembed_movers"])
+
+
 def test_non_baseline_view_requires_an_active_ablation(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 

@@ -206,7 +206,10 @@ output matrix used to produce logits, then softmaxed to show the next-token
 distribution that this intermediate state implies. The five residual states
 from the embedding input through the block output support this probe;
 `output_norm` should match the normal Readout. With an ablation active, the
-ablated view shows the projected probability movements relative to baseline.
+ablated view keeps the selected residual node open, shows its projected top
+tokens, and compares baseline and ablated probabilities. If the selected state
+or its projected distribution did not change measurably, the view says so
+instead of displaying an empty comparison.
 
 Captured tensors live in memory for the session only. They are cleared when a
 new checkpoint is loaded, replaced by a fresh analysis, or dropped after a

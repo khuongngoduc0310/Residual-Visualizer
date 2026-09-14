@@ -76,20 +76,43 @@ export function NodeView({
                 This residual state is projected through the model&apos;s final
                 output matrix.
               </p>
+              {inspect.view === "ablated" && inspect.ablation ? (
+                <p className="ct-input-hint" data-testid="deembed-context">
+                  Ablation target: {inspect.ablation.node_label}; dimensions{" "}
+                  {inspect.ablation.dims.join(", ")}; {inspect.ablation.scope === "all"
+                    ? "all prompt tokens"
+                    : `token ${inspect.ablation.position}`}.
+                </p>
+              ) : null}
             </div>
           </div>
-          <div className="ct-readout-row">
-            <div className="ct-chart-box">
-              <PlotlyFigure
-                figure={inspect.deembed_figure}
-                className="ct-plot ct-plot-side"
-                data-testid="deembed-plot"
-              />
-            </div>
+          {inspect.view === "ablated" && inspect.deembed_state_changed === false ? (
+            <p className="ct-status" data-testid="deembed-no-effect">
+              The selected residual state did not change under this ablation,
+              so its projected prediction is unchanged.
+            </p>
+          ) : inspect.view === "ablated" && inspect.deembed_has_effect === false ? (
+            <p className="ct-status" data-testid="deembed-no-effect">
+              The residual state changed, but its projected probabilities did
+              not change measurably.
+            </p>
+          ) : null}
+          <div
+            className={`ct-readout-row ${inspect.deembed_figure ? "" : "ct-readout-row-single"}`}
+          >
+            {inspect.deembed_figure ? (
+              <div className="ct-chart-box">
+                <PlotlyFigure
+                  figure={inspect.deembed_figure}
+                  className="ct-plot ct-plot-side"
+                  data-testid="deembed-plot"
+                />
+              </div>
+            ) : null}
             <div className="ct-readout-table">
               <h3 className="ct-subheading">
-                {inspect.deembed_movers.length > 0
-                  ? "Projected probability movement"
+                {inspect.view === "ablated"
+                  ? "Ablated projected next tokens"
                   : "Top projected next tokens"}
               </h3>
               <div className="ct-table-wrap">
@@ -99,34 +122,57 @@ export function NodeView({
                       <th>Rank</th>
                       <th>Token</th>
                       <th>ID</th>
-                      <th>
-                        {inspect.deembed_movers.length > 0 ? "Delta" : "Probability"}
-                      </th>
+                      <th>Probability</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {inspect.deembed_movers.length > 0
-                      ? inspect.deembed_movers.map((row, index) => (
-                          <tr key={row.token_id}>
-                            <td>{index + 1}</td>
-                            <td>{row.text}</td>
-                            <td>{row.token_id}</td>
-                            <td>{row.delta.toFixed(6)}</td>
-                          </tr>
-                        ))
-                      : inspect.deembed_top.map((row) => (
-                          <tr key={row.rank}>
-                            <td>{row.rank}</td>
-                            <td>{row.text}</td>
-                            <td>{row.token_id}</td>
-                            <td>{row.probability.toFixed(6)}</td>
-                          </tr>
-                        ))}
+                    {inspect.deembed_top.map((row) => (
+                      <tr key={row.rank}>
+                        <td>{row.rank}</td>
+                        <td>{row.text}</td>
+                        <td>{row.token_id}</td>
+                        <td>{row.probability.toFixed(6)}</td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
+                {inspect.deembed_top.length === 0 ? (
+                  <p className="ct-status ct-status-error" role="alert">
+                    Projected prediction data was missing from the server
+                    response.
+                  </p>
+                ) : null}
               </div>
             </div>
           </div>
+          {inspect.view === "ablated" && inspect.deembed_movers.length > 0 ? (
+            <div className="ct-table-wrap">
+              <h3 className="ct-subheading">Projected probability movement</h3>
+              <table
+                className="ct-table"
+                data-testid="deembed-comparison-table"
+              >
+                <thead>
+                  <tr>
+                    <th>Token</th>
+                    <th>Baseline</th>
+                    <th>Ablated</th>
+                    <th>Delta</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {inspect.deembed_movers.map((row) => (
+                    <tr key={row.token_id}>
+                      <td>{row.text}</td>
+                      <td>{row.baseline_probability.toFixed(6)}</td>
+                      <td>{row.ablated_probability.toFixed(6)}</td>
+                      <td>{row.delta.toFixed(6)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
         </section>
       )}
 
