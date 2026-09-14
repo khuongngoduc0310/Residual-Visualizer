@@ -1,7 +1,8 @@
 import numpy as np
 import tensorflow as tf
 
-import app
+import engine
+import inspection_views
 from checkpoint import LoadedCheckpoint, load_checkpoint, save_checkpoint
 from charts import grid_shape
 from inspection import STREAM_NODES, TRACE_ORDER, capture_locations
@@ -28,8 +29,8 @@ def test_cpu_checkpoint_to_all_stream_node_views(tmp_path):
         save_checkpoint(tmp_path, model, VOCABULARY, config)
         checkpoint = load_checkpoint(tmp_path)
 
-    manager = app.ModelManager(
-        device_detector=lambda: app.ComputeDevice(
+    manager = engine.ModelManager(
+        device_detector=lambda: engine.ComputeDevice(
             label="CPU", tf_device="/CPU:0", is_gpu=False
         )
     )
@@ -37,7 +38,7 @@ def test_cpu_checkpoint_to_all_stream_node_views(tmp_path):
     assert loaded.success
     assert not manager.loaded_state.device.is_gpu
 
-    analyzed = app.analyze_prompt_payload(manager, "Hello, world!")
+    analyzed = engine.analyze_prompt_payload(manager, "Hello, world!")
     assert analyzed["ok"]
     analysis = manager.inspection_session.analysis
     assert analysis.token_count == 4
@@ -50,7 +51,7 @@ def test_cpu_checkpoint_to_all_stream_node_views(tmp_path):
             continue
         values = analysis.capture.locations[node.key]
         assert values.shape[0] == analysis.token_count
-        payload = app.inspect_node_payload(manager, node.key, 3)
+        payload = inspection_views.inspect_node_payload(manager, node.key, 3)
         assert payload["state"] == "ready"
         assert payload["selected_position"] == 3
         if node.kind == "pattern":
@@ -88,7 +89,7 @@ def test_cpu_checkpoint_to_all_stream_node_views(tmp_path):
                 values[index].reshape(rows, cols),
             )
 
-    default_inspect = app.inspect_node_payload(manager)
+    default_inspect = inspection_views.inspect_node_payload(manager)
     assert default_inspect["selected_position"] == 3
     assert default_inspect["node"]["key"] == "output_norm"
     assert checkpoint.config == config

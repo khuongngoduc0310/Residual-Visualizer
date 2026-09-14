@@ -1,19 +1,22 @@
 import json
+from threading import Event, Thread
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import tensorflow as tf
 
-import app
-from checkpoint import CONFIG_FILENAME, CheckpointError, save_checkpoint
+import engine
+import inspection_views
+import server
+from checkpoint import CONFIG_FILENAME, CheckpointError, LoadedCheckpoint, save_checkpoint
 from inspection import (
     DEFAULT_NODE_KEY,
     EMBEDDING_COMPONENTS,
     STREAM_NODES,
     TRACE_ORDER,
 )
-from model import ModelConfig, build_model
+from model import ARCHITECTURE_NAME, ModelConfig, build_model
 
 
 VOCABULARY = ["", "[UNK]", "hello", ",", "world", "!"]
@@ -42,19 +45,19 @@ def make_checkpoint(path, seed=9):
 
 
 def fake_device(label="CPU", tf_device="/CPU:0", is_gpu=False):
-    return app.ComputeDevice(label=label, tf_device=tf_device, is_gpu=is_gpu)
+    return engine.ComputeDevice(label=label, tf_device=tf_device, is_gpu=is_gpu)
 
 
 def loaded_manager(path, seed=9):
     make_checkpoint(path, seed=seed)
-    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager = engine.ModelManager(device_detector=lambda: fake_device())
     manager.load(str(path))
     return manager
 
 
 def analyze_fixture(path, prompt="hello , world"):
     manager = loaded_manager(path)
-    payload = app.analyze_prompt_payload(manager, prompt)
+    payload = engine.analyze_prompt_payload(manager, prompt)
     assert payload["ok"]
     return manager, payload
 
@@ -69,15 +72,15 @@ def node_keys():
 
 def test_load_payload_loads_checkpoint_and_describes_the_model(tmp_path):
     config = make_checkpoint(tmp_path)
-    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager = engine.ModelManager(device_detector=lambda: fake_device())
 
-    payload = app.load_model_payload(manager, str(tmp_path))
+    payload = engine.load_model_payload(manager, str(tmp_path))
 
     assert payload["ok"]
     assert payload["loaded"]
     assert payload["status"] == "Model loaded successfully."
     assert payload["meta"]["path"] == str(tmp_path)
-    assert payload["meta"]["architecture"] == app.ARCHITECTURE_NAME
+    assert payload["meta"]["architecture"] == ARCHITECTURE_NAME
     assert payload["meta"]["vocab_size"] == config.vocab_size
     assert payload["meta"]["max_len"] == config.max_len
     assert payload["meta"]["embedding_dim"] == config.embedding_dim
@@ -91,9 +94,9 @@ def test_load_payload_loads_checkpoint_and_describes_the_model(tmp_path):
 
 
 def test_load_payload_reports_missing_folder_and_has_no_model(tmp_path):
-    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager = engine.ModelManager(device_detector=lambda: fake_device())
 
-    payload = app.load_model_payload(manager, str(tmp_path / "missing"))
+    payload = engine.load_model_payload(manager, str(tmp_path / "missing"))
 
     assert not payload["ok"]
     assert "Checkpoint could not be loaded" in payload["status"]
@@ -106,9 +109,9 @@ def test_load_payload_reports_missing_folder_and_has_no_model(tmp_path):
 
 
 def test_load_payload_rejects_an_empty_folder_path():
-    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager = engine.ModelManager(device_detector=lambda: fake_device())
 
-    payload = app.load_model_payload(manager, "   ")
+    payload = engine.load_model_payload(manager, "   ")
 
     assert not payload["ok"]
     assert "Enter a checkpoint folder path" in payload["status"]
@@ -119,7 +122,7 @@ def test_failed_replacement_unloads_previous_model(tmp_path):
     valid_path = tmp_path / "valid"
     valid_path.mkdir()
     make_checkpoint(valid_path)
-    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager = engine.ModelManager(device_detector=lambda: fake_device())
 
     first = manager.load(str(valid_path))
     second = manager.load(str(tmp_path / "invalid"))
@@ -138,7 +141,7 @@ def test_loading_a_second_checkpoint_releases_the_first(tmp_path):
     make_checkpoint(second_path, seed=2)
     clear_calls = []
     collect_calls = []
-    manager = app.ModelManager(
+    manager = engine.ModelManager(
         device_detector=lambda: fake_device(),
         session_clearer=lambda: clear_calls.append(True),
         collector=lambda: collect_calls.append(True),
@@ -157,7 +160,7 @@ def test_loading_a_second_checkpoint_releases_the_first(tmp_path):
 def test_malformed_config_is_reported_without_traceback(tmp_path):
     make_checkpoint(tmp_path)
     (tmp_path / CONFIG_FILENAME).write_text("{not json", encoding="utf-8")
-    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager = engine.ModelManager(device_detector=lambda: fake_device())
 
     result = manager.load(str(tmp_path))
 
@@ -175,7 +178,7 @@ def test_mismatched_checkpoint_is_reported_and_clears_previous_model(tmp_path):
     document = json.loads(config_path.read_text(encoding="utf-8"))
     document["model"]["feed_forward_dim"] = 12
     config_path.write_text(json.dumps(document), encoding="utf-8")
-    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager = engine.ModelManager(device_detector=lambda: fake_device())
 
     result = manager.load(str(valid_path))
 
@@ -186,7 +189,7 @@ def test_mismatched_checkpoint_is_reported_and_clears_previous_model(tmp_path):
 
 def test_use_loaded_state_requires_and_yields_the_active_model(tmp_path):
     make_checkpoint(tmp_path)
-    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager = engine.ModelManager(device_detector=lambda: fake_device())
 
     with pytest.raises(CheckpointError, match="Load a checkpoint"):
         with manager.use_loaded_state():
@@ -197,25 +200,68 @@ def test_use_loaded_state_requires_and_yields_the_active_model(tmp_path):
         assert state.checkpoint_path == tmp_path
 
 
+def test_inspection_state_holds_the_model_lifecycle_lock():
+    config = tiny_config()
+    checkpoint = LoadedCheckpoint(
+        model=object(), vocabulary=VOCABULARY, config=config
+    )
+    manager = engine.ModelManager(
+        checkpoint_loader=lambda _directory: checkpoint,
+        device_detector=lambda: fake_device(),
+        session_clearer=lambda: None,
+        collector=lambda: 0,
+    )
+    assert manager.load("test-checkpoint").success
+
+    entered = Event()
+    release = Event()
+    clear_done = Event()
+
+    def hold_inspection_state():
+        with manager.use_inspection_state() as (state, session):
+            assert state is not None
+            assert session is None
+            entered.set()
+            assert release.wait(timeout=2)
+
+    def clear_manager():
+        manager.clear()
+        clear_done.set()
+
+    inspection_thread = Thread(target=hold_inspection_state)
+    inspection_thread.start()
+    assert entered.wait(timeout=2)
+
+    clear_thread = Thread(target=clear_manager)
+    clear_thread.start()
+    assert not clear_done.wait(timeout=0.05)
+
+    release.set()
+    inspection_thread.join(timeout=2)
+    clear_thread.join(timeout=2)
+    assert clear_done.is_set()
+    assert manager.loaded_state is None
+
+
 def test_cuda_device_requires_cuda_build_and_visible_gpu(monkeypatch):
     monkeypatch.setattr(
-        app.tf.sysconfig,
+        engine.tf.sysconfig,
         "get_build_info",
         lambda: {"is_cuda_build": True},
     )
-    monkeypatch.setattr(app.tf.test, "is_built_with_cuda", lambda: True)
+    monkeypatch.setattr(engine.tf.test, "is_built_with_cuda", lambda: True)
     monkeypatch.setattr(
-        app.tf.config,
+        engine.tf.config,
         "list_physical_devices",
         lambda kind: [SimpleNamespace(name="GPU:0")] if kind == "GPU" else [],
     )
     monkeypatch.setattr(
-        app.tf.config.experimental,
+        engine.tf.config.experimental,
         "get_device_details",
         lambda device: {"device_name": "Test NVIDIA GPU"},
     )
 
-    device = app.detect_compute_device()
+    device = engine.detect_compute_device()
 
     assert device.is_gpu
     assert device.tf_device == "/GPU:0"
@@ -224,14 +270,14 @@ def test_cuda_device_requires_cuda_build_and_visible_gpu(monkeypatch):
 
 def test_cpu_device_does_not_claim_cuda(monkeypatch):
     monkeypatch.setattr(
-        app.tf.sysconfig,
+        engine.tf.sysconfig,
         "get_build_info",
         lambda: {"is_cuda_build": False},
     )
-    monkeypatch.setattr(app.tf.test, "is_built_with_cuda", lambda: False)
-    monkeypatch.setattr(app.tf.config, "list_physical_devices", lambda kind: [])
+    monkeypatch.setattr(engine.tf.test, "is_built_with_cuda", lambda: False)
+    monkeypatch.setattr(engine.tf.config, "list_physical_devices", lambda kind: [])
 
-    device = app.detect_compute_device()
+    device = engine.detect_compute_device()
 
     assert not device.is_gpu
     assert device.tf_device == "/CPU:0"
@@ -243,9 +289,9 @@ def test_cpu_device_does_not_claim_cuda(monkeypatch):
 
 
 def test_analyze_without_model_reports_and_clears():
-    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager = engine.ModelManager(device_detector=lambda: fake_device())
 
-    payload = app.analyze_prompt_payload(manager, "hello")
+    payload = engine.analyze_prompt_payload(manager, "hello")
 
     assert not payload["ok"]
     assert "Load a checkpoint" in payload["status"]
@@ -257,7 +303,7 @@ def test_analyze_without_model_reports_and_clears():
 def test_analyze_payload_renders_token_and_prediction_tables(tmp_path):
     manager = loaded_manager(tmp_path)
 
-    payload = app.analyze_prompt_payload(manager, "hello , world")
+    payload = engine.analyze_prompt_payload(manager, "hello , world")
 
     assert payload["ok"]
     assert payload["status"] == "Analysis complete for 3 processed token(s)."
@@ -280,12 +326,12 @@ def test_analyze_payload_renders_token_and_prediction_tables(tmp_path):
 
 def test_failed_analysis_clears_previous_results(tmp_path):
     make_checkpoint(tmp_path)
-    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager = engine.ModelManager(device_detector=lambda: fake_device())
     manager.load(str(tmp_path))
-    app.analyze_prompt_payload(manager, "hello , world")
+    engine.analyze_prompt_payload(manager, "hello , world")
     assert manager.inspection_session is not None
 
-    payload = app.analyze_prompt_payload(manager, "   ")
+    payload = engine.analyze_prompt_payload(manager, "   ")
 
     assert not payload["ok"]
     assert payload["status"] == "Enter a prompt first."
@@ -296,9 +342,9 @@ def test_failed_analysis_clears_previous_results(tmp_path):
 
 
 def test_ablation_requires_a_loaded_analysis():
-    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager = engine.ModelManager(device_detector=lambda: fake_device())
 
-    payload = app.ablate_feature_payload(
+    payload = engine.ablate_feature_payload(
         manager,
         "ffn_hidden",
         [0],
@@ -314,7 +360,7 @@ def test_ablation_requires_a_loaded_analysis():
 def test_ablation_stores_a_capture_and_exposes_comparisons(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    result = app.ablate_feature_payload(
+    result = engine.ablate_feature_payload(
         manager,
         "ffn_hidden",
         [0, 2],
@@ -328,7 +374,7 @@ def test_ablation_stores_a_capture_and_exposes_comparisons(tmp_path):
     assert result["ablation"]["dims"] == [0, 2]
     assert len(result["ablation"]["baseline_values"]) == 2
 
-    diff = app.inspect_node_payload(
+    diff = inspection_views.inspect_node_payload(
         manager,
         "ffn_hidden",
         1,
@@ -339,7 +385,7 @@ def test_ablation_stores_a_capture_and_exposes_comparisons(tmp_path):
     assert diff["map_figure"]["data"]
     assert diff["ablation"]["node_key"] == "ffn_hidden"
 
-    readout = app.inspect_node_payload(
+    readout = inspection_views.inspect_node_payload(
         manager,
         "readout",
         1,
@@ -363,22 +409,22 @@ def test_ablation_stores_a_capture_and_exposes_comparisons(tmp_path):
 
 def test_clearing_ablation_keeps_the_baseline_capture(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
-    app.ablate_feature_payload(manager, "output_norm", [0], "zero", "all")
+    engine.ablate_feature_payload(manager, "output_norm", [0], "zero", "all")
     assert manager.inspection_session.ablated is not None
 
-    result = app.clear_ablation_payload(manager)
+    result = engine.clear_ablation_payload(manager)
 
     assert result == {"ok": True, "status": "Ablation cleared."}
     assert manager.inspection_session is not None
     assert manager.inspection_session.ablated is None
-    baseline = app.inspect_node_payload(manager, "output_norm", 0, "baseline")
+    baseline = inspection_views.inspect_node_payload(manager, "output_norm", 0, "baseline")
     assert baseline["view"] == "baseline"
 
 
 def test_deembedding_projects_residual_state_through_output_matrix(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    payload = app.inspect_node_payload(
+    payload = inspection_views.inspect_node_payload(
         manager,
         "output_norm",
         1,
@@ -411,7 +457,7 @@ def test_deembedding_projects_residual_state_through_output_matrix(tmp_path):
         atol=1e-6,
     )
 
-    hidden = app.inspect_node_payload(
+    hidden = inspection_views.inspect_node_payload(
         manager,
         "ffn_hidden",
         1,
@@ -425,9 +471,9 @@ def test_deembedding_projects_residual_state_through_output_matrix(tmp_path):
 
 def test_deembedding_compares_baseline_and_ablated_residual_states(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
-    app.ablate_feature_payload(manager, "ffn_hidden", [0], "zero", "token", 1)
+    engine.ablate_feature_payload(manager, "ffn_hidden", [0], "zero", "token", 1)
 
-    payload = app.inspect_node_payload(
+    payload = inspection_views.inspect_node_payload(
         manager,
         "ffn_residual",
         1,
@@ -444,7 +490,7 @@ def test_deembedding_compares_baseline_and_ablated_residual_states(tmp_path):
 def test_non_baseline_view_requires_an_active_ablation(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    payload = app.inspect_node_payload(manager, "output_norm", 0, "diff")
+    payload = inspection_views.inspect_node_payload(manager, "output_norm", 0, "diff")
 
     assert payload["state"] == "error"
     assert "No ablation is active" in payload["message"]
@@ -456,14 +502,14 @@ def test_non_baseline_view_requires_an_active_ablation(tmp_path):
 
 def test_inspect_before_analysis_reports_awaiting_state(tmp_path):
     make_checkpoint(tmp_path)
-    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager = engine.ModelManager(device_detector=lambda: fake_device())
     manager.load(str(tmp_path))
 
-    payload = app.inspect_node_payload(manager)
+    payload = inspection_views.inspect_node_payload(manager)
 
     assert payload["ok"]
     assert payload["state"] == "awaiting"
-    assert payload["message"] == app.INSPECT_AWAITING
+    assert payload["message"] == inspection_views.INSPECT_AWAITING
     assert payload["node"] is None
     assert payload["selected_position"] is None
     assert payload["token_choices"] == []
@@ -481,7 +527,7 @@ def test_inspect_before_analysis_reports_awaiting_state(tmp_path):
 def test_inspect_returns_capture_defaults(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    payload = app.inspect_node_payload(manager)
+    payload = inspection_views.inspect_node_payload(manager)
 
     assert payload["ok"]
     assert payload["state"] == "ready"
@@ -522,7 +568,7 @@ def test_inspect_uses_stored_data_without_running_the_model(tmp_path):
     checkpoint = manager.loaded_state.checkpoint
     object.__setattr__(checkpoint, "model", ExplodingModel())
 
-    payload = app.inspect_node_payload(manager, "ffn_hidden", 1)
+    payload = inspection_views.inspect_node_payload(manager, "ffn_hidden", 1)
 
     assert payload["state"] == "ready"
     assert payload["node"]["key"] == "ffn_hidden"
@@ -539,7 +585,7 @@ def test_inspect_uses_stored_data_without_running_the_model(tmp_path):
 def test_inspect_can_switch_back_to_the_default_node(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    payload = app.inspect_node_payload(manager, "output_norm", 0)
+    payload = inspection_views.inspect_node_payload(manager, "output_norm", 0)
 
     assert payload["node"]["key"] == "output_norm"
     assert payload["node"]["label"] == "Layer norm \u00b7 block output"
@@ -549,8 +595,8 @@ def test_inspect_can_switch_back_to_the_default_node(tmp_path):
 def test_inspect_clamps_token_position_to_the_capture(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    payload = app.inspect_node_payload(manager, "output_norm", 999)
-    high = app.inspect_node_payload(manager, "output_norm", -3)
+    payload = inspection_views.inspect_node_payload(manager, "output_norm", 999)
+    high = inspection_views.inspect_node_payload(manager, "output_norm", -3)
 
     assert payload["selected_position"] == 2
     assert high["selected_position"] == 0
@@ -559,7 +605,7 @@ def test_inspect_clamps_token_position_to_the_capture(tmp_path):
 def test_inspect_reports_an_unknown_node(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    payload = app.inspect_node_payload(manager, "not_a_node", 0)
+    payload = inspection_views.inspect_node_payload(manager, "not_a_node", 0)
 
     assert payload["state"] == "error"
     assert "Unknown stream node" in payload["message"]
@@ -568,8 +614,8 @@ def test_inspect_reports_an_unknown_node(tmp_path):
 def test_each_node_normalizes_its_own_color_scale(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    embedding = app.inspect_node_payload(manager, "embedding", None)
-    after_attention = app.inspect_node_payload(
+    embedding = inspection_views.inspect_node_payload(manager, "embedding", None)
+    after_attention = inspection_views.inspect_node_payload(
         manager, "attention_residual", None
     )
 
@@ -582,7 +628,7 @@ def test_each_node_normalizes_its_own_color_scale(tmp_path):
 def test_attention_pattern_node_returns_pattern_view(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    payload = app.inspect_node_payload(manager, "attention_pattern", 1)
+    payload = inspection_views.inspect_node_payload(manager, "attention_pattern", 1)
 
     assert payload["state"] == "ready"
     assert payload["node"]["kind"] == "pattern"
@@ -597,7 +643,7 @@ def test_embedding_components_node_views(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
     for key in EMBEDDING_COMPONENTS:
-        payload = app.inspect_node_payload(manager, key, 0)
+        payload = inspection_views.inspect_node_payload(manager, key, 0)
         assert payload["state"] == "ready"
         assert payload["node"]["kind"] == "component"
         assert payload["node"]["family"] == "components"
@@ -612,7 +658,7 @@ def test_readout_node_returns_topk_rows_and_entropy(tmp_path):
     manager, payload = analyze_fixture(tmp_path)
     analysis = manager.inspection_session.analysis
 
-    inspected = app.inspect_node_payload(manager, "readout", 2)
+    inspected = inspection_views.inspect_node_payload(manager, "readout", 2)
 
     assert inspected["state"] == "ready"
     assert inspected["node"]["kind"] == "readout"
@@ -633,7 +679,7 @@ def test_every_node_renders_a_view_after_analysis(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
     for node in STREAM_NODES:
-        payload = app.inspect_node_payload(manager, node.key, 0)
+        payload = inspection_views.inspect_node_payload(manager, node.key, 0)
         assert payload["state"] == "ready", node.key
         assert payload["node"]["trace_index"] == node_keys().index(node.key)
         assert payload["selected_position"] == 0
@@ -641,12 +687,12 @@ def test_every_node_renders_a_view_after_analysis(tmp_path):
 
 def test_load_payloads_are_json_serializable(tmp_path):
     make_checkpoint(tmp_path)
-    manager = app.ModelManager(device_detector=lambda: fake_device())
-    loaded = app.load_model_payload(manager, str(tmp_path))
-    app.analyze_prompt_payload(manager, "hello , world")
-    activation = app.inspect_node_payload(manager, "ffn_update", 1)
-    pattern = app.inspect_node_payload(manager, "attention_pattern", 1)
-    readout = app.inspect_node_payload(manager, "readout", 2)
+    manager = engine.ModelManager(device_detector=lambda: fake_device())
+    loaded = engine.load_model_payload(manager, str(tmp_path))
+    engine.analyze_prompt_payload(manager, "hello , world")
+    activation = inspection_views.inspect_node_payload(manager, "ffn_update", 1)
+    pattern = inspection_views.inspect_node_payload(manager, "attention_pattern", 1)
+    readout = inspection_views.inspect_node_payload(manager, "readout", 2)
 
     for payload in (loaded, activation, pattern, readout):
         json.loads(json.dumps(payload))
@@ -659,9 +705,9 @@ def test_loading_a_new_checkpoint_clears_the_stored_capture(tmp_path):
     second.mkdir()
     make_checkpoint(first, seed=1)
     make_checkpoint(second, seed=2)
-    manager = app.ModelManager(device_detector=lambda: fake_device())
+    manager = engine.ModelManager(device_detector=lambda: fake_device())
     manager.load(str(first))
-    app.analyze_prompt_payload(manager, "hello , world")
+    engine.analyze_prompt_payload(manager, "hello , world")
     assert manager.inspection_session is not None
 
     manager.load(str(second))
@@ -670,11 +716,11 @@ def test_loading_a_new_checkpoint_clears_the_stored_capture(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# Static options and app construction
+# Static options and server construction
 
 
 def test_options_payload_describes_the_stream_graph():
-    payload = app.options_payload()
+    payload = inspection_views.options_payload()
 
     graph = payload["graph"]
     assert graph["default_node"] == DEFAULT_NODE_KEY
@@ -715,9 +761,9 @@ def test_options_payload_describes_the_stream_graph():
 
 
 def test_create_app_builds_endpoints_without_launching():
-    demo = app.create_app(app.ModelManager(device_detector=lambda: fake_device()))
+    demo = server.create_app(engine.ModelManager(device_detector=lambda: fake_device()))
 
-    assert isinstance(demo, app.gr.Blocks)
+    assert isinstance(demo, server.gr.Blocks)
     api_names = {fn.api_name for fn in demo.fns.values()}
     assert {
         "load_checkpoint",
