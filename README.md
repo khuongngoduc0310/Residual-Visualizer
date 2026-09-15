@@ -296,7 +296,7 @@ releasing a new compatible app. Clone the repository and import from that
 checkout instead of copying model classes into the notebook:
 
 ```python
-REPOSITORY_REVISION = "SET_TO_PRE_NORM_IMPLEMENTATION_COMMIT"
+REPOSITORY_REVISION = "9420a8507bea21aaf6b7ff64154ab1e5af712ec3"
 !git clone https://github.com/khuongngoduc0310/Residual-Visualizer.git
 %cd Residual-Visualizer
 !git checkout {REPOSITORY_REVISION}
@@ -322,9 +322,8 @@ from preprocess import (
 )
 ```
 
-Replace the sentinel with the immutable commit containing this pre-norm
-implementation before running the notebook. The setup cell intentionally stops
-instead of falling back to an old or moving revision.
+The notebook pins the immutable implementation commit instead of falling back
+to an old or moving revision.
 
 Process punctuation before creating the dataset. Adapt the tokenizer before
 building the model so the output size uses the actual vocabulary length:
