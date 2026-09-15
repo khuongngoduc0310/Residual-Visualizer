@@ -1,17 +1,17 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { GraphNode, StreamGraph } from "../types";
 
-const MIN_VIEW_WIDTH = 1580;
-const VIEW_HEIGHT = 620;
-const SPINE_Y = 300;
-const CHIP_W = 170;
+const MIN_VIEW_WIDTH = 1500;
+const VIEW_HEIGHT = 570;
+const SPINE_Y = 285;
+const CHIP_W = 140;
 const CHIP_H = 60;
-const SPINE_X0 = 360;
-const SPINE_STEP = 225;
-const READOUT_W = 160;
+const SPINE_X0 = 300;
+const SPINE_STEP = 185;
+const READOUT_W = 155;
 
-const COMPONENT_CY = [145, 205];
+const COMPONENT_CY = [225, 345];
 
 const KIND_FILL: Record<string, string> = {
   component: "#e0e7ff",
@@ -58,7 +58,38 @@ function wrapLines(text: string, width: number, size: number): string[] {
     }
   }
   if (current) lines.push(current);
-  return lines.slice(0, 2);
+  if (lines.length <= 2) return lines;
+
+  const visible = lines.slice(0, 2);
+  const lastLine = visible[1];
+  visible[1] = `${lastLine.slice(0, Math.max(1, charsPerLine - 1)).trimEnd()}…`;
+  return visible;
+}
+
+function diagramLabel(node: GraphNode): string {
+  switch (node.stage) {
+    case "attention_input_norm":
+    case "ffn_input_norm":
+      return "Layer norm";
+    case "attention_pattern":
+      return "Causal attention pattern";
+    case "attention_update":
+      return "Attention output";
+    case "attention_residual":
+      return "After attention";
+    case "ffn_hidden":
+      return "Hidden · ReLU";
+    case "ffn_update":
+      return "FFN output";
+    case "ffn_residual":
+      return "After FFN";
+    default:
+      break;
+  }
+
+  if (node.key === "output_norm") return "Final layer norm";
+  if (node.key === "readout") return "Next-token probabilities";
+  return node.label;
 }
 
 function linkKind(link: string): "add" | "ln" | "softmax" {
@@ -81,6 +112,7 @@ export function ResidualGraph({
   onSelect,
 }: ResidualGraphProps) {
   const [hoverKey, setHoverKey] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const nodeByKey = useMemo(() => {
     const map = new Map<string, GraphNode>();
@@ -98,6 +130,50 @@ export function ResidualGraph({
     MIN_VIEW_WIDTH,
     readoutCx + READOUT_W / 2 + 5,
   );
+
+  useEffect(() => {
+    const scrollContainer = scrollRef.current;
+    if (!scrollContainer) return;
+
+    const revealSelected = () => {
+      const selectedNode = Array.from(
+        scrollContainer.querySelectorAll<SVGGElement>("[data-node]"),
+      ).find((element) => element.dataset.node === selectedKey);
+      const svg = scrollContainer.querySelector("svg");
+      const centerX = Number(selectedNode?.dataset.centerX);
+      if (!selectedNode || !svg || !Number.isFinite(centerX)) return;
+
+      const renderedWidth = svg.getBoundingClientRect().width || viewWidth;
+      const maxScrollLeft = Math.max(
+        0,
+        renderedWidth - scrollContainer.clientWidth,
+      );
+      const targetLeft = Math.min(
+        maxScrollLeft,
+        Math.max(
+          0,
+          centerX * (renderedWidth / viewWidth) -
+            scrollContainer.clientWidth / 2,
+        ),
+      );
+      if (typeof scrollContainer.scrollTo === "function") {
+        const reduceMotion = window.matchMedia?.(
+          "(prefers-reduced-motion: reduce)",
+        ).matches;
+        scrollContainer.scrollTo({
+          left: targetLeft,
+          behavior: reduceMotion ? "auto" : "smooth",
+        });
+      }
+    };
+
+    revealSelected();
+    if (typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(revealSelected);
+    observer.observe(scrollContainer);
+    return () => observer.disconnect();
+  }, [selectedKey, viewWidth]);
 
   function spineIndex(key: string): number {
     const index = graph.spine.indexOf(key);
@@ -118,11 +194,12 @@ export function ResidualGraph({
     const hovered = key === hoverKey;
     const x = cx - width / 2;
     const y = cy - height / 2;
-    const lines = wrapLines(node.label, width - 14, fontSize);
+    const displayLabel = diagramLabel(node);
+    const lines = wrapLines(displayLabel, width - 14, fontSize);
     const lineCount = Math.max(1, lines.length);
     const fill = KIND_FILL[node.kind] ?? "#f8fafc";
     const stroke = selected
-      ? "#dc2626"
+      ? "#1d4ed8"
       : hovered
         ? "#334155"
         : KIND_STROKE[node.kind] ?? "#cbd5e1";
@@ -130,9 +207,14 @@ export function ResidualGraph({
       <g
         key={key}
         role="button"
-        aria-label={node.label}
+        aria-label={
+          displayLabel === node.label
+            ? node.label
+            : `${displayLabel}: ${node.label}`
+        }
         tabIndex={selectable ? 0 : -1}
         data-node={key}
+        data-center-x={cx}
         data-selected={selected || undefined}
         opacity={selectable ? 1 : 0.55}
         onMouseEnter={() => setHoverKey(key)}
@@ -155,7 +237,7 @@ export function ResidualGraph({
             height={height + 6}
             rx={11}
             fill="none"
-            stroke="#fca5a5"
+            stroke="#93c5fd"
             strokeWidth={5}
             opacity={0.55}
           />
@@ -174,7 +256,7 @@ export function ResidualGraph({
           const lineY = cy + (index - (lineCount - 1) / 2) * (fontSize + 3);
           return (
             <text
-              key={line}
+              key={`${line}-${index}`}
               x={cx}
               y={lineY}
               textAnchor="middle"
@@ -222,7 +304,7 @@ export function ResidualGraph({
         x={x}
         y={y}
         textAnchor={anchor}
-        fontSize={8.5}
+        fontSize={10}
         fontWeight={600}
         fill="#64748b"
       >
@@ -250,7 +332,7 @@ export function ResidualGraph({
   items.push(
     <line
       key="spine-line"
-      x1={70}
+      x1={185}
       y1={SPINE_Y}
       x2={lastChipX + CHIP_W / 2}
       y2={SPINE_Y}
@@ -263,12 +345,12 @@ export function ResidualGraph({
   graph.components.forEach((key, index) => {
     const node = nodeByKey.get(key);
     if (!node || index >= COMPONENT_CY.length) return;
-    const cx = 150;
+    const cx = 120;
     const cy = COMPONENT_CY[index];
-    items.push(renderChip(key, cx, cy, 140, 42, node, 9.5));
+    items.push(renderChip(key, cx, cy, 130, 42, node, 10));
     items.push(
       renderArrow(
-        cx + 70,
+        cx + 65,
         cy,
         spineXs[0] - CHIP_W / 2,
         SPINE_Y,
@@ -323,7 +405,7 @@ export function ResidualGraph({
             x={midX}
             y={SPINE_Y + 18}
             textAnchor="middle"
-            fontSize={8.5}
+            fontSize={10}
             fontWeight={600}
             fill="#334155"
           >
@@ -380,10 +462,10 @@ export function ResidualGraph({
     const addX = (spineXs[addIndex] + spineXs[addIndex + 1]) / 2;
     const isAttention = branch.kind === "attention";
     const isAbove = branch.side === "above";
-    const containerY = isAbove ? 54 : 390;
-    const containerH = isAttention ? 172 : 174;
+    const containerY = isAbove ? 40 : 365;
+    const containerH = isAttention ? 150 : 158;
     const centerX = (readX + addX) / 2;
-    const containerW = isAttention ? 380 : 300;
+    const containerW = isAttention ? 330 : 280;
     const containerLeft = centerX - containerW / 2;
     const innerW = containerW - 40;
     const pathNodes = branch.path
@@ -392,8 +474,8 @@ export function ResidualGraph({
     const observableNodes = branch.observables
       .map((key) => nodeByKey.get(key))
       .filter((node): node is GraphNode => node !== undefined);
-    const pathX = observableNodes.length ? centerX - 72 : centerX;
-    const pathWidth = observableNodes.length ? 190 : innerW;
+    const pathX = observableNodes.length ? centerX - 62 : centerX;
+    const pathWidth = observableNodes.length ? 165 : innerW;
     const firstPathY = containerY + 36;
     const lastPathY = firstPathY + (pathNodes.length - 1) * 44;
 
@@ -405,19 +487,21 @@ export function ResidualGraph({
           width={containerW}
           height={containerH}
           rx={12}
-          fill="#f8fafc"
-          stroke="#94a3b8"
+          fill={isAttention ? "#f8fbff" : "#fffafd"}
+          stroke={isAttention ? "#bfdbfe" : "#e5d5e1"}
           strokeWidth={1.3}
         />
+        <title>{branch.label}</title>
         <text
           x={centerX}
           y={isAbove ? containerY - 9 : containerY + containerH + 19}
           textAnchor="middle"
-          fontSize={11}
+          fontSize={10.5}
           fontWeight={700}
           fill="#475569"
+          letterSpacing="0.08em"
         >
-          {branch.label}
+          {`BLOCK ${branch.block_index + 1} · ${isAttention ? "ATTENTION" : "FEED-FORWARD"}`}
         </text>
         {pathNodes.slice(0, -1).map((node, pathIndex) => (
           <g key={`path-arrow-${node.key}`}>
@@ -445,7 +529,7 @@ export function ResidualGraph({
             <line
               x1={pathX + pathWidth / 2}
               y1={containerY + 80}
-              x2={centerX + 72}
+              x2={centerX + 57}
               y2={containerY + 80 + observableIndex * 42}
               stroke="#94a3b8"
               strokeWidth={1.2}
@@ -453,7 +537,7 @@ export function ResidualGraph({
             />
             {renderChip(
               node.key,
-              centerX + 120,
+              centerX + 104,
               containerY + 80 + observableIndex * 42,
               94,
               36,
@@ -478,8 +562,8 @@ export function ResidualGraph({
           )
         )}
         {isAbove
-          ? renderArrowLabel(readX - 10, 246, "reads", "end")
-          : renderArrowLabel(readX - 10, 360, "reads", "end")}
+          ? renderArrowLabel(readX - 10, 235, "reads", "end")
+          : renderArrowLabel(readX - 10, 348, "reads", "end")}
         {renderArrow(
           pathX,
           isAbove ? lastPathY + 20 : lastPathY - 20,
@@ -487,8 +571,8 @@ export function ResidualGraph({
           SPINE_Y,
         )}
         {isAbove
-          ? renderArrowLabel(addX - 10, 256, "writes", "end")
-          : renderArrowLabel(addX + 10, 342, "writes", "start")}
+          ? renderArrowLabel(addX - 10, 246, "writes", "end")
+          : renderArrowLabel(addX + 10, 335, "writes", "start")}
       </g>,
     );
   });
@@ -538,19 +622,27 @@ export function ResidualGraph({
 
   return (
     <>
-      <div className="ct-graph-scroll">
-        <svg
-          className="ct-graph-svg"
-          width={viewWidth}
-          height={VIEW_HEIGHT}
-          viewBox={`0 0 ${viewWidth} ${VIEW_HEIGHT}`}
-          data-testid="residual-graph"
-          role="group"
-          aria-label="Residual stream wiring diagram"
+      <div className="ct-graph-frame">
+        <div
+          ref={scrollRef}
+          className="ct-graph-scroll"
+          tabIndex={0}
+          aria-label="Scrollable residual stream wiring diagram"
         >
-          {items}
-        </svg>
+          <svg
+            className="ct-graph-svg"
+            width={viewWidth}
+            height={VIEW_HEIGHT}
+            viewBox={`0 0 ${viewWidth} ${VIEW_HEIGHT}`}
+            data-testid="residual-graph"
+            role="group"
+            aria-label="Residual stream wiring diagram"
+          >
+            {items}
+          </svg>
+        </div>
       </div>
+      <p className="ct-graph-hint">Scroll horizontally to follow the model flow.</p>
       <div className="ct-graph-legend" data-testid="graph-legend">
         {legendEntries.map((entry) => (
           <span key={entry.kind} className="ct-graph-legend-item">

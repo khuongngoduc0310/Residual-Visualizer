@@ -260,6 +260,12 @@ SPINE_NODES: Tuple[str, ...] = (
 
 DEEMBEDDABLE_NODES: Tuple[str, ...] = (*RESIDUAL_STATES, "output_norm")
 
+VOCAB_CONTRIBUTABLE_NODES: Tuple[str, ...] = tuple(
+    block_node_key(block_index, stage)
+    for block_index in range(NUM_TRANSFORMER_BLOCKS)
+    for stage in ("attention_update", "ffn_update")
+)
+
 ABLATABLE_NODES: Tuple[str, ...] = (
     "embedding",
     *(

@@ -4,6 +4,7 @@ import tensorflow as tf
 
 from checkpoint import load_checkpoint, save_checkpoint
 from inspection import (
+    ABLATABLE_NODES,
     CAPTURED_KEYS,
     BLOCK_NODE_STAGES,
     DEFAULT_NODE_KEY,
@@ -12,6 +13,7 @@ from inspection import (
     RESIDUAL_STATES,
     SPINE_NODES,
     TRACE_ORDER,
+    VOCAB_CONTRIBUTABLE_NODES,
     CapturedRun,
     InspectionError,
     capture_locations,
@@ -193,6 +195,12 @@ def test_node_catalog_is_complete_and_ordered():
     )
     assert SPINE_NODES == (*RESIDUAL_STATES, "output_norm")
     assert DEEMBEDDABLE_NODES == SPINE_NODES
+    assert VOCAB_CONTRIBUTABLE_NODES == tuple(
+        block_node_key(block_index, stage)
+        for block_index in range(NUM_TRANSFORMER_BLOCKS)
+        for stage in ("attention_update", "ffn_update")
+    )
+    assert not set(VOCAB_CONTRIBUTABLE_NODES) & set(ABLATABLE_NODES)
 
 
 def test_node_specs_have_families_kinds_and_explanations():

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as engine from "./api/client";
 import { CtApiError } from "./api/gradio";
 import { NodeStrip } from "./components/NodeStrip";
@@ -85,11 +85,14 @@ export function App() {
   const [inspectResult, setInspectResult] = useState<InspectPayload | null>(null);
   const [inspectBusy, setInspectBusy] = useState(false);
   const [inspectError, setInspectError] = useState<string>("");
+  const inspectRequestId = useRef(0);
   const [nodeKey, setNodeKey] = useState<string | null>(null);
   const [tokenPosition, setTokenPosition] = useState<number | null>(null);
   const [view, setView] = useState<InspectView>("baseline");
   const [activeAblation, setActiveAblation] = useState<AblationInfo | null>(null);
   const [deembedEnabled, setDeembedEnabled] = useState(false);
+  const [vocabContributionsEnabled, setVocabContributionsEnabled] =
+    useState(false);
   const [ablationNode, setAblationNode] = useState("");
   const [ablationDimsText, setAblationDimsText] = useState("0");
   const [ablationMode, setAblationMode] = useState<"zero" | "mean">("zero");
@@ -140,6 +143,13 @@ export function App() {
   const defaultNodeKey = graph?.default_node ?? "output_norm";
   const effectiveKey = nodeKey ?? defaultNodeKey;
   const graphNode = nodeByKey.get(effectiveKey) ?? null;
+  const inspectIntent = useRef({
+    key: null as string | null,
+    position: null as number | null,
+    highlight: null as string | null,
+    deembed: false,
+    vocabContributions: false,
+  });
 
   const traceItems = useMemo<NodeStripItem[]>(() => {
     const items: NodeStripItem[] = [];
@@ -157,16 +167,40 @@ export function App() {
       requestedView: InspectView = "baseline",
       requestedHighlight: string | null = null,
       requestedDeembed = deembedEnabled,
+      requestedVocabContributions = vocabContributionsEnabled,
     ): Promise<InspectPayload> => {
+      const requestId = ++inspectRequestId.current;
+      const previousDeembed = Boolean(inspectResult?.deembed_present);
+      const previousVocabContributions = Boolean(
+        inspectResult?.vocab_contribution_present,
+      );
+      const previousIntent = inspectIntent.current;
+      inspectIntent.current = {
+        key,
+        position,
+        highlight: requestedHighlight,
+        deembed: requestedDeembed,
+        vocabContributions: requestedVocabContributions,
+      };
       setInspectBusy(true);
       setInspectError("");
       try {
         const result =
           requestedView === "baseline" &&
           requestedHighlight === null &&
-          !requestedDeembed
+          !requestedDeembed &&
+          !requestedVocabContributions
             ? await engine.inspectNode(key, position)
-            : requestedDeembed
+            : requestedVocabContributions
+              ? await engine.inspectNode(
+                  key,
+                  position,
+                  requestedView,
+                  requestedHighlight,
+                  requestedDeembed,
+                  true,
+                )
+              : requestedDeembed
               ? await engine.inspectNode(
                   key,
                   position,
@@ -180,29 +214,50 @@ export function App() {
                   requestedView,
                   requestedHighlight,
                 );
+        if (requestId !== inspectRequestId.current) return result;
+        if (result.state === "error") {
+          setInspectError(result.message);
+          inspectIntent.current = previousIntent;
+          setDeembedEnabled(previousDeembed);
+          setVocabContributionsEnabled(previousVocabContributions);
+          return result;
+        }
         setInspectResult(result);
         setActiveAblation(result.ablation);
         if (result.state === "ready" && result.node) {
           setNodeKey(result.node.key);
           setTokenPosition(result.selected_position);
           setView(result.view);
-          if (requestedDeembed && !result.node.deembeddable) {
-            setDeembedEnabled(false);
-          }
+          setDeembedEnabled(result.deembed_present);
+          setVocabContributionsEnabled(result.vocab_contribution_present);
+          inspectIntent.current = {
+            key: result.node.key,
+            position: result.selected_position,
+            highlight: requestedHighlight,
+            deembed: result.deembed_present,
+            vocabContributions: result.vocab_contribution_present,
+          };
         }
         return result;
       } catch (error) {
         const message = errorMessage(error);
-        setInspectError(message);
+        if (requestId === inspectRequestId.current) {
+          setInspectError(message);
+          inspectIntent.current = previousIntent;
+          setDeembedEnabled(previousDeembed);
+          setVocabContributionsEnabled(previousVocabContributions);
+        }
         throw error;
       } finally {
-        setInspectBusy(false);
+        if (requestId === inspectRequestId.current) setInspectBusy(false);
       }
     },
-    [deembedEnabled],
+    [deembedEnabled, inspectResult, vocabContributionsEnabled],
   );
 
   async function handleLoad(): Promise<void> {
+    inspectRequestId.current += 1;
+    setInspectBusy(false);
     setLoadBusy(true);
     setLoadError("");
     try {
@@ -216,6 +271,7 @@ export function App() {
       setView("baseline");
       setActiveAblation(null);
       setDeembedEnabled(false);
+      setVocabContributionsEnabled(false);
       setAblationStatus("");
       setAblationError("");
       setHighlightToken("");
@@ -231,6 +287,8 @@ export function App() {
   }
 
   async function handleAnalyze(): Promise<void> {
+    inspectRequestId.current += 1;
+    setInspectBusy(false);
     setAnalyzeBusy(true);
     setAnalyzeError("");
     setInspectError("");
@@ -245,8 +303,9 @@ export function App() {
         setView("baseline");
         setActiveAblation(null);
         setDeembedEnabled(false);
+        setVocabContributionsEnabled(false);
         setHighlightToken("");
-        await runInspect(null, null, "baseline", null, false);
+        await runInspect(null, null, "baseline", null, false, false);
       } else {
         setInspectResult(null);
         setNodeKey(null);
@@ -289,14 +348,15 @@ export function App() {
   function handleView(nextView: InspectView): void {
     if (nextView !== "baseline" && !activeAblation) return;
     const nextDeembed = nextView === "diff" ? false : deembedEnabled;
-    if (!nextDeembed) setDeembedEnabled(false);
-    setView(nextView);
+    const nextVocabContributions =
+      nextView === "diff" ? false : vocabContributionsEnabled;
     void runInspect(
       effectiveKey,
       tokenPosition,
       nextView,
       highlightToken || null,
       nextDeembed,
+      nextVocabContributions,
     ).catch(() => undefined);
   }
 
@@ -308,6 +368,19 @@ export function App() {
       tokenPosition,
       view,
       highlightToken || null,
+      enabled,
+    ).catch(() => undefined);
+  }
+
+  function handleVocabContributionsChange(enabled: boolean): void {
+    if (!inspectResult?.node?.vocab_contributable || view === "diff") return;
+    setVocabContributionsEnabled(enabled);
+    void runInspect(
+      effectiveKey,
+      tokenPosition,
+      view,
+      highlightToken || null,
+      false,
       enabled,
     ).catch(() => undefined);
   }
@@ -333,6 +406,7 @@ export function App() {
     setAblationBusy(true);
     setAblationError("");
     setAblationStatus("");
+    let applied = false;
     try {
       const result = await engine.ablateFeature(
         ablationNode,
@@ -347,20 +421,24 @@ export function App() {
         setView("baseline");
         return;
       }
+      applied = true;
       setActiveAblation(result.ablation);
       setAblationStatus(result.status);
-      setView("ablated");
+      const intent = inspectIntent.current;
       await runInspect(
-        effectiveKey,
-        tokenPosition,
+        intent.key,
+        intent.position,
         "ablated",
-        highlightToken || null,
-        deembedEnabled,
+        intent.highlight,
+        intent.deembed,
+        intent.vocabContributions,
       );
     } catch (error) {
       setAblationError(errorMessage(error));
-      setActiveAblation(null);
-      setView("baseline");
+      if (!applied) {
+        setActiveAblation(null);
+        setView("baseline");
+      }
     } finally {
       setAblationBusy(false);
     }
@@ -374,9 +452,18 @@ export function App() {
       setActiveAblation(null);
       setView("baseline");
       setDeembedEnabled(false);
+      setVocabContributionsEnabled(false);
       setHighlightToken("");
       setAblationStatus(result.status);
-      await runInspect(effectiveKey, tokenPosition, "baseline", null, false);
+      const intent = inspectIntent.current;
+      await runInspect(
+        intent.key,
+        intent.position,
+        "baseline",
+        null,
+        false,
+        false,
+      );
     } catch (error) {
       setAblationError(errorMessage(error));
     } finally {
@@ -392,6 +479,7 @@ export function App() {
       view,
       highlightToken.trim() || null,
       deembedEnabled,
+      vocabContributionsEnabled,
     ).catch(() => undefined);
   }
 
@@ -844,10 +932,19 @@ export function App() {
                 )}
               </div>
             ) : (
-              <p className="ct-muted" data-testid="inspect-awaiting">
+              <p
+                className={inspectError ? "ct-status ct-status-error" : "ct-muted"}
+                data-testid="inspect-awaiting"
+                role={inspectError ? "alert" : undefined}
+              >
                 {inspectMessage || AWAITING_COPY}
               </p>
             )}
+            {inspectError && inspectReady ? (
+              <p className="ct-status ct-status-error" role="alert">
+                {inspectError}
+              </p>
+            ) : null}
 
             <div className="ct-control-row">
               <label className="ct-select-wrap">
@@ -907,6 +1004,7 @@ export function App() {
                 onHighlightTokenChange={setHighlightToken}
                 onHighlightTokenSubmit={handleHighlightTokenSubmit}
                 onDeembedChange={handleDeembedChange}
+                onVocabContributionsChange={handleVocabContributionsChange}
               />
             ) : null}
           </section>

@@ -163,7 +163,8 @@ pre-norm branches: they normalize a copy of the stream, compute an update, and
 write it back at the add junction while the raw stream bypasses the branch.
 Every
 node below is a captured state you can select either from the node strip or
-from its chip in the expanded diagram:
+from its chip in the expanded diagram. The expanded diagram automatically
+brings the current selection into view while keeping the full model scrollable:
 
 | Node | Kind | Notes |
 | --- | --- | --- |
@@ -172,11 +173,11 @@ from its chip in the expanded diagram:
 | Residual stream input | stream | token + position embeddings |
 | Block N - Layer norm - attention input | ln | normalized branch input; raw stream bypasses it |
 | Block N - Causal attention pattern | pattern | query × key weights, mean over heads |
-| Block N - Attention output → residual | update | what attention writes into the stream |
+| Block N - Attention output → residual | update | what attention writes into the stream; supports direct logit attribution |
 | Block N - Residual stream after attention | stream | prior stream + attention update |
 | Block N - Layer norm - FFN input | ln | normalized branch input; raw stream bypasses it |
 | Block N - FFN hidden (ReLU) | hidden | non-negative activation with training-time L1 |
-| Block N - FFN output → residual | update | what the FFN writes into the stream |
+| Block N - FFN output → residual | update | what the FFN writes into the stream; supports direct logit attribution |
 | Block N - Residual stream after FFN | stream | post-attention residual + FFN update |
 | Layer norm - readout input | ln | final model norm read by the projection |
 | Readout probabilities | readout | top-K next tokens + entropy |
@@ -223,6 +224,19 @@ ablated view keeps the selected residual node open, shows its projected top
 tokens, and compares baseline and ablated probabilities. If the selected state
 or its projected distribution did not change measurably, the view says so
 instead of displaying an empty comparison.
+
+Attention and FFN output nodes instead offer **Show vocabulary
+contributions**. This is direct logit attribution, not a standalone
+prediction: the captured update is centered and scaled with the actual final
+residual's layer-normalization denominator and learned gain, then multiplied
+by the vocabulary kernel. The shared layer-normalization offset, vocabulary
+bias, and softmax are excluded. Positive values promote a token's final logit;
+negative values suppress it. The view lists both directions separately. With
+an ablation active, baseline and ablated contributions each use their own
+final-residual normalization context, so their delta can reflect a changed
+update, a changed normalization context, or both. These values describe the
+update's direct residual-path contribution, not its indirect effect on later
+updates.
 
 Captured tensors live in memory for the session only. They are cleared when a
 new checkpoint is loaded, replaced by a fresh analysis, or dropped after a

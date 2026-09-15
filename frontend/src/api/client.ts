@@ -40,6 +40,7 @@ export function inspectNode(
   view: InspectView = "baseline",
   highlightToken: string | null = null,
   deembed = false,
+  vocabContributions = false,
 ): Promise<InspectPayload> {
   return callApi("inspect_node", [
     nodeKey,
@@ -47,5 +48,6 @@ export function inspectNode(
     view,
     highlightToken,
     deembed,
+    vocabContributions,
   ]);
 }

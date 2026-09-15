@@ -422,8 +422,42 @@ button {
   font-size: 11.5px;
 }
 
+.ct-graph-frame {
+  position: relative;
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background:
+    linear-gradient(90deg, rgba(248, 250, 252, 0.95), transparent 42px),
+    #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
 .ct-graph-scroll {
   overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-color: #94a3b8 #f1f5f9;
+  scrollbar-width: thin;
+}
+
+.ct-graph-scroll:focus-visible {
+  outline: 2px solid var(--blue-700);
+  outline-offset: -2px;
+}
+
+.ct-graph-scroll::-webkit-scrollbar {
+  height: 10px;
+}
+
+.ct-graph-scroll::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.ct-graph-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid #f1f5f9;
+  border-radius: 999px;
+  background: #94a3b8;
 }
 
 .ct-graph-svg {
@@ -432,11 +466,21 @@ button {
   height: auto;
 }
 
+.ct-graph-svg [data-node] {
+  transition: opacity 120ms ease;
+}
+
+.ct-graph-hint {
+  margin: 7px 2px 0;
+  color: var(--muted-2);
+  font-size: 10.5px;
+}
+
 .ct-graph-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 6px 16px;
-  margin-top: 12px;
+  margin-top: 10px;
   font-size: 11px;
   color: var(--muted);
 }
@@ -457,8 +501,8 @@ button {
 
 .ct-graph-legend-selected {
   background: #ffffff;
-  border-color: #dc2626;
-  box-shadow: 0 0 0 1px #fca5a5;
+  border-color: var(--blue-700);
+  box-shadow: 0 0 0 1px #93c5fd;
 }
 
 .ct-graph-note {
@@ -608,6 +652,11 @@ button {
   height: 320px;
 }
 
+.ct-plot-contribution {
+  width: 100%;
+  height: 440px;
+}
+
 .ct-plot-caption {
   font-size: 11px;
   color: var(--muted-2);
@@ -652,6 +701,13 @@ button {
 .ct-compare-columns {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.ct-contribution-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin: 12px 0;
 }
@@ -730,11 +786,16 @@ button {
   }
 
   .ct-readout-row,
-  .ct-compare-columns {
+  .ct-compare-columns,
+  .ct-contribution-columns {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .ct-panel-head-actions {
     justify-content: flex-start;
+  }
+
+  .ct-graph-frame {
+    margin-inline: -8px;
   }
 }

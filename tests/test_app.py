@@ -18,6 +18,7 @@ from inspection import (
     SPINE_NODES,
     STREAM_NODES,
     TRACE_ORDER,
+    VOCAB_CONTRIBUTABLE_NODES,
     block_node_key,
 )
 from model import ARCHITECTURE_NAME, ModelConfig, build_model
@@ -504,6 +505,279 @@ def test_deembedding_normalizes_raw_residual_states_before_projection(tmp_path):
     )
 
 
+@pytest.mark.parametrize("stage", ["attention_update", "ffn_update"])
+def test_update_vocabulary_contributions_use_final_norm_context(tmp_path, stage):
+    manager, _ = analyze_fixture(tmp_path)
+    node_key = block0(stage)
+    position = 1
+
+    payload = inspection_views.inspect_node_payload(
+        manager,
+        node_key,
+        position,
+        "baseline",
+        None,
+        False,
+        True,
+    )
+
+    checkpoint = manager.loaded_state.checkpoint
+    locations = manager.inspection_session.analysis.capture.locations
+    update = locations[node_key][position]
+    final_residual = locations[block_node_key(2, "ffn_residual")][position]
+    final_norm = checkpoint.model.get_layer("final_output_layer_norm")
+    gamma = final_norm.get_weights()[0]
+    kernel = checkpoint.model.get_layer("token_probabilities").get_weights()[0]
+    expected = (
+        (update - np.mean(update))
+        / np.sqrt(
+            np.mean(np.square(final_residual - np.mean(final_residual)))
+            + final_norm.epsilon
+        )
+        * gamma
+    ) @ kernel
+    rows = {
+        row["token_id"]: row["logit_contribution"]
+        for row in (
+            payload["vocab_contribution_promoted"]
+            + payload["vocab_contribution_suppressed"]
+        )
+    }
+
+    assert payload["node"]["vocab_contributable"] is True
+    assert payload["node"]["deembeddable"] is False
+    assert payload["vocab_contribution_present"] is True
+    assert payload["deembed_present"] is False
+    assert payload["vocab_contribution_figure"]["data"]
+    assert set(rows) == set(range(checkpoint.config.vocab_size))
+    for token_id, contribution in rows.items():
+        assert contribution == pytest.approx(expected[token_id], rel=1e-5, abs=1e-7)
+    assert all(
+        row["logit_contribution"] > 0.0
+        for row in payload["vocab_contribution_promoted"]
+    )
+    assert all(
+        row["logit_contribution"] < 0.0
+        for row in payload["vocab_contribution_suppressed"]
+    )
+
+
+def test_update_vocabulary_contributions_exclude_output_bias_and_softmax(tmp_path):
+    manager, _ = analyze_fixture(tmp_path)
+    args = (
+        manager,
+        block0("attention_update"),
+        1,
+        "baseline",
+        None,
+        False,
+        True,
+    )
+    before = inspection_views.inspect_node_payload(*args)
+    projection = manager.loaded_state.checkpoint.model.get_layer(
+        "token_probabilities"
+    )
+    kernel, bias = projection.get_weights()
+    projection.set_weights([kernel, bias + np.linspace(1.0, 3.0, len(bias))])
+
+    after = inspection_views.inspect_node_payload(*args)
+
+    def contribution_map(payload):
+        return {
+            row["token_id"]: row["logit_contribution"]
+            for row in (
+                payload["vocab_contribution_promoted"]
+                + payload["vocab_contribution_suppressed"]
+            )
+        }
+
+    assert contribution_map(after) == pytest.approx(contribution_map(before))
+    values = [
+        row["logit_contribution"]
+        for row in (
+            after["vocab_contribution_promoted"]
+            + after["vocab_contribution_suppressed"]
+        )
+    ]
+    assert any(value < 0.0 for value in values)
+    assert sum(values) != pytest.approx(1.0)
+
+
+def test_direct_attribution_scales_before_projecting_large_updates(tmp_path):
+    manager, _ = analyze_fixture(tmp_path)
+    checkpoint = manager.loaded_state.checkpoint
+    width = checkpoint.config.embedding_dim
+    magnitude = np.finfo(np.float32).max / 2.0
+    update = np.array(
+        [[magnitude if index % 2 == 0 else -magnitude for index in range(width)]],
+        dtype=np.float32,
+    )
+    final_residual = update.copy()
+
+    contributions = inspection_views._direct_logit_contributions(
+        update, final_residual, 0, checkpoint
+    )
+
+    assert np.all(np.isfinite(contributions))
+
+
+def test_direct_attributions_reconstruct_the_final_logits(tmp_path):
+    manager, _ = analyze_fixture(tmp_path)
+    checkpoint = manager.loaded_state.checkpoint
+    locations = manager.inspection_session.analysis.capture.locations
+    final_residual_key = block_node_key(2, "ffn_residual")
+    position = 1
+    component_keys = [
+        "embedding",
+        *VOCAB_CONTRIBUTABLE_NODES,
+    ]
+    contributions = sum(
+        (
+            inspection_views._direct_logit_contributions(
+                locations[key],
+                locations[final_residual_key],
+                position,
+                checkpoint,
+            )
+            for key in component_keys
+        ),
+        np.zeros(checkpoint.config.vocab_size),
+    )
+    final_norm = checkpoint.model.get_layer("final_output_layer_norm")
+    _, beta = final_norm.get_weights()
+    kernel, bias = checkpoint.model.get_layer("token_probabilities").get_weights()
+    reconstructed = contributions + beta @ kernel + bias
+    expected = locations["output_norm"][position] @ kernel + bias
+
+    np.testing.assert_allclose(reconstructed, expected, rtol=1e-5, atol=1e-6)
+
+
+def test_update_vocabulary_contributions_compare_ablated_capture(tmp_path):
+    manager, _ = analyze_fixture(tmp_path)
+    engine.ablate_feature_payload(
+        manager,
+        block0("ffn_hidden"),
+        list(range(manager.loaded_state.checkpoint.config.feed_forward_dim)),
+        "zero",
+        "token",
+        1,
+    )
+
+    payload = inspection_views.inspect_node_payload(
+        manager,
+        block0("ffn_update"),
+        1,
+        "ablated",
+        None,
+        False,
+        True,
+    )
+
+    assert payload["vocab_contribution_present"] is True
+    assert payload["vocab_contribution_has_effect"] is True
+    assert payload["vocab_contribution_movers"]
+    assert payload["vocab_contribution_figure"]["data"]
+    checkpoint = manager.loaded_state.checkpoint
+    baseline_locations = manager.inspection_session.analysis.capture.locations
+    ablated_locations = (
+        manager.inspection_session.ablated.analysis.capture.locations
+    )
+    final_residual_key = block_node_key(2, "ffn_residual")
+    expected_baseline = inspection_views._direct_logit_contributions(
+        baseline_locations[block0("ffn_update")],
+        baseline_locations[final_residual_key],
+        1,
+        checkpoint,
+    )
+    expected_ablated = inspection_views._direct_logit_contributions(
+        ablated_locations[block0("ffn_update")],
+        ablated_locations[final_residual_key],
+        1,
+        checkpoint,
+    )
+    for row in payload["vocab_contribution_movers"]:
+        token_id = row["token_id"]
+        assert row["baseline_contribution"] == pytest.approx(
+            expected_baseline[token_id], rel=1e-5, abs=1e-7
+        )
+        assert row["ablated_contribution"] == pytest.approx(
+            expected_ablated[token_id], rel=1e-5, abs=1e-7
+        )
+        assert row["delta"] == pytest.approx(
+            expected_ablated[token_id] - expected_baseline[token_id],
+            rel=1e-5,
+            abs=1e-7,
+        )
+
+
+def test_update_vocabulary_contributions_report_no_post_norm_effect(tmp_path):
+    manager, _ = analyze_fixture(tmp_path)
+    engine.ablate_feature_payload(manager, "output_norm", [0], "zero", "token", 1)
+
+    payload = inspection_views.inspect_node_payload(
+        manager,
+        block0("attention_update"),
+        1,
+        "ablated",
+        None,
+        False,
+        True,
+    )
+
+    assert payload["vocab_contribution_present"] is True
+    assert payload["vocab_contribution_has_effect"] is False
+    assert payload["vocab_contribution_movers"] == []
+    assert payload["vocab_contribution_figure"] is None
+    assert (
+        payload["vocab_contribution_promoted"]
+        or payload["vocab_contribution_suppressed"]
+    )
+
+
+def test_vocabulary_contribution_request_ignores_unsupported_nodes(tmp_path):
+    manager, _ = analyze_fixture(tmp_path)
+
+    payload = inspection_views.inspect_node_payload(
+        manager,
+        block0("ffn_hidden"),
+        1,
+        "baseline",
+        None,
+        False,
+        True,
+    )
+
+    assert payload["node"]["vocab_contributable"] is False
+    assert payload["vocab_contribution_present"] is False
+    assert payload["vocab_contribution_promoted"] == []
+
+
+def test_vocabulary_contribution_failure_returns_inspection_error(
+    tmp_path, monkeypatch
+):
+    manager, _ = analyze_fixture(tmp_path)
+
+    def fail(*_args, **_kwargs):
+        raise inspection_views.InspectionError(
+            "Vocabulary contributions were not finite."
+        )
+
+    monkeypatch.setattr(inspection_views, "_direct_logit_contributions", fail)
+    payload = inspection_views.inspect_node_payload(
+        manager,
+        block0("attention_update"),
+        1,
+        "baseline",
+        None,
+        False,
+        True,
+    )
+
+    assert payload["state"] == "error"
+    assert payload["message"] == "Vocabulary contributions were not finite."
+    assert payload["vocab_contribution_present"] is False
+
+
 def test_deembedding_compares_baseline_and_ablated_residual_states(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
     engine.ablate_feature_payload(
@@ -610,6 +884,11 @@ def test_inspect_before_analysis_reports_awaiting_state(tmp_path):
     assert payload["readout_figure"] is None
     assert payload["entropy_figure"] is None
     assert payload["readout_rows"] == []
+    assert payload["vocab_contribution_present"] is False
+    assert payload["vocab_contribution_promoted"] == []
+    assert payload["vocab_contribution_suppressed"] == []
+    assert payload["vocab_contribution_movers"] == []
+    assert payload["vocab_contribution_figure"] is None
 
 
 def test_inspect_returns_capture_defaults(tmp_path):
@@ -789,9 +1068,18 @@ def test_load_payloads_are_json_serializable(tmp_path):
         manager, block0("attention_pattern"), 1
     )
     readout = inspection_views.inspect_node_payload(manager, "readout", 2)
+    contribution = inspection_views.inspect_node_payload(
+        manager,
+        block0("attention_update"),
+        1,
+        "baseline",
+        None,
+        False,
+        True,
+    )
 
-    for payload in (loaded, activation, pattern, readout):
-        json.loads(json.dumps(payload))
+    for payload in (loaded, activation, pattern, readout, contribution):
+        json.loads(json.dumps(payload, allow_nan=False))
 
 
 def test_loading_a_new_checkpoint_clears_the_stored_capture(tmp_path):
@@ -850,6 +1138,11 @@ def test_options_payload_describes_the_stream_graph():
     assert ffn["observables"] == []
     assert graph["branches"][-1]["block_index"] == 2
     assert graph["components"] == list(EMBEDDING_COMPONENTS)
+    assert {
+        node["key"]
+        for node in graph["nodes"]
+        if node["vocab_contributable"]
+    } == set(VOCAB_CONTRIBUTABLE_NODES)
     assert [node["key"] for node in payload["ablation_nodes"]] == list(
         ABLATABLE_NODES
     )

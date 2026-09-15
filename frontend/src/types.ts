@@ -25,6 +25,7 @@ export interface GraphNode {
   normalized: boolean;
   feature_axis: boolean;
   deembeddable: boolean;
+  vocab_contributable: boolean;
   trace_index: number;
   trace_count: number;
   prev_key: string | null;
@@ -170,6 +171,21 @@ export interface MoverRow {
   highlighted: boolean;
 }
 
+export interface VocabContributionRow {
+  rank: number;
+  text: string;
+  token_id: number;
+  logit_contribution: number;
+}
+
+export interface VocabContributionMoverRow {
+  token_id: number;
+  text: string;
+  baseline_contribution: number;
+  ablated_contribution: number;
+  delta: number;
+}
+
 export interface PositionEffect {
   position: number;
   text: string;
@@ -211,6 +227,12 @@ export interface InspectPayload {
   deembed_figure: FigureSpec | null;
   deembed_has_effect: boolean | null;
   deembed_state_changed: boolean | null;
+  vocab_contribution_present: boolean;
+  vocab_contribution_promoted: VocabContributionRow[];
+  vocab_contribution_suppressed: VocabContributionRow[];
+  vocab_contribution_movers: VocabContributionMoverRow[];
+  vocab_contribution_figure: FigureSpec | null;
+  vocab_contribution_has_effect: boolean | null;
 }
 
 export interface AblationOperationPayload {

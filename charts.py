@@ -301,3 +301,86 @@ def render_readout_delta(
         margin=dict(l=90, r=35, t=75, b=55),
     )
     return figure
+
+
+def render_vocab_contributions(
+    promoted: Sequence[dict],
+    suppressed: Sequence[dict],
+    token_label: str,
+) -> go.Figure:
+    """Show the strongest signed direct-logit contributions of one update."""
+    rows = [*promoted, *suppressed]
+    if not rows:
+        raise ValueError("vocabulary contribution rows must not be empty")
+
+    labels = [f'{row["text"]} · {row["token_id"]}' for row in rows]
+    values = [float(row["logit_contribution"]) for row in rows]
+    figure = go.Figure(
+        go.Bar(
+            x=values,
+            y=labels,
+            orientation="h",
+            marker_color=[
+                "#2563eb" if contribution > 0.0 else "#dc2626"
+                for contribution in values
+            ],
+            text=[f"{contribution:+.4f}" for contribution in values],
+            textposition="outside",
+            hovertemplate=(
+                "%{y}<br>direct logit contribution: %{x:+.6f}<extra></extra>"
+            ),
+        )
+    )
+    figure.update_layout(
+        title=f"Direct logit attribution for {token_label}",
+        xaxis_title="Direct logit contribution",
+        yaxis_title="Token · ID",
+        yaxis=dict(autorange="reversed"),
+        template="plotly_white",
+        margin=dict(l=110, r=55, t=75, b=55),
+    )
+    figure.update_xaxes(zeroline=True, zerolinecolor="#64748b", zerolinewidth=1)
+    return figure
+
+
+def render_vocab_contribution_delta(
+    rows: Sequence[dict],
+    token_label: str,
+) -> go.Figure:
+    """Show ablated-minus-baseline movement in direct-logit attribution."""
+    if not rows:
+        raise ValueError("vocabulary contribution delta rows must not be empty")
+
+    labels = [f'{row["text"]} · {row["token_id"]}' for row in rows]
+    deltas = [float(row["delta"]) for row in rows]
+    customdata = [
+        [
+            float(row["baseline_contribution"]),
+            float(row["ablated_contribution"]),
+        ]
+        for row in rows
+    ]
+    figure = go.Figure(
+        go.Bar(
+            x=deltas,
+            y=labels,
+            orientation="h",
+            marker_color=["#2563eb" if delta > 0.0 else "#dc2626" for delta in deltas],
+            customdata=customdata,
+            hovertemplate=(
+                "%{y}<br>baseline contribution: %{customdata[0]:+.6f}"
+                "<br>ablated contribution: %{customdata[1]:+.6f}"
+                "<br>delta: %{x:+.6f}<extra></extra>"
+            ),
+        )
+    )
+    figure.update_layout(
+        title=f"Ablation effect on direct logit attribution for {token_label}",
+        xaxis_title="Ablated - baseline logit contribution",
+        yaxis_title="Token · ID",
+        yaxis=dict(autorange="reversed"),
+        template="plotly_white",
+        margin=dict(l=110, r=35, t=75, b=55),
+    )
+    figure.update_xaxes(zeroline=True, zerolinecolor="#64748b", zerolinewidth=1)
+    return figure

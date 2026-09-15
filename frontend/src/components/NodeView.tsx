@@ -8,6 +8,11 @@ interface NodeViewProps {
   onHighlightTokenChange: (value: string) => void;
   onHighlightTokenSubmit: () => void;
   onDeembedChange: (enabled: boolean) => void;
+  onVocabContributionsChange: (enabled: boolean) => void;
+}
+
+function signed(value: number): string {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(6)}`;
 }
 
 export function NodeView({
@@ -17,6 +22,7 @@ export function NodeView({
   onHighlightTokenChange,
   onHighlightTokenSubmit,
   onDeembedChange,
+  onVocabContributionsChange,
 }: NodeViewProps) {
   const kind = inspect.node?.kind ?? null;
   const scale = inspect.scale;
@@ -63,6 +69,26 @@ export function NodeView({
           <span>
             De-embed at this token
             {inspect.view === "diff" ? " (available in baseline or ablated view)" : ""}
+          </span>
+        </label>
+      )}
+
+      {inspect.node?.vocab_contributable && (
+        <label className="ct-deembed-control">
+          <input
+            type="checkbox"
+            checked={inspect.vocab_contribution_present}
+            onChange={(event) =>
+              onVocabContributionsChange(event.target.checked)
+            }
+            disabled={inspect.view === "diff"}
+            data-testid="vocab-contribution-toggle"
+          />
+          <span>
+            Show vocabulary contributions
+            {inspect.view === "diff"
+              ? " (available in baseline or ablated view)"
+              : ""}
           </span>
         </label>
       )}
@@ -167,6 +193,148 @@ export function NodeView({
                       <td>{row.baseline_probability.toFixed(6)}</td>
                       <td>{row.ablated_probability.toFixed(6)}</td>
                       <td>{row.delta.toFixed(6)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </section>
+      )}
+
+      {inspect.vocab_contribution_present && (
+        <section
+          className="ct-ablation-results"
+          data-testid="vocab-contribution-results"
+        >
+          <h3 className="ct-subheading">Direct logit attribution</h3>
+          <p className="ct-muted">
+            Signed contributions through the model&apos;s final normalization
+            scale and vocabulary kernel. Positive values promote a token;
+            negative values suppress it. These are not probabilities.
+          </p>
+          {inspect.view === "ablated" ? (
+            <p className="ct-input-hint">
+              Movement can come from the update, the final normalization
+              context, or both; unchanged attribution does not imply an
+              unchanged final prediction.
+            </p>
+          ) : null}
+          {inspect.view === "ablated" && inspect.ablation ? (
+            <p className="ct-input-hint" data-testid="vocab-contribution-context">
+              Ablation target: {inspect.ablation.node_label}; dimensions{" "}
+              {inspect.ablation.dims.join(", ")};{" "}
+              {inspect.ablation.scope === "all"
+                ? "all prompt tokens"
+                : `token ${inspect.ablation.position}`}.
+            </p>
+          ) : null}
+          {inspect.view === "ablated" &&
+          inspect.vocab_contribution_has_effect === false ? (
+            <p className="ct-status" data-testid="vocab-contribution-no-effect">
+              This update&apos;s direct logit attribution did not change measurably
+              under the ablation.
+            </p>
+          ) : null}
+          {inspect.vocab_contribution_figure ? (
+            <div className="ct-chart-box">
+              <PlotlyFigure
+                figure={inspect.vocab_contribution_figure}
+                className="ct-plot ct-plot-contribution"
+                data-testid="vocab-contribution-plot"
+              />
+            </div>
+          ) : null}
+          <div className="ct-contribution-columns">
+            <div className="ct-readout-table">
+              <h3 className="ct-subheading">Strongest promoted tokens</h3>
+              <div className="ct-table-wrap">
+                <table
+                  className="ct-table"
+                  data-testid="vocab-contribution-promoted-table"
+                  aria-label="Strongest promoted token contributions"
+                >
+                  <thead>
+                    <tr>
+                      <th>Rank</th>
+                      <th>Token</th>
+                      <th>ID</th>
+                      <th>Logit contribution</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {inspect.vocab_contribution_promoted.map((row) => (
+                      <tr key={row.token_id}>
+                        <td>{row.rank}</td>
+                        <td>{row.text}</td>
+                        <td>{row.token_id}</td>
+                        <td>{signed(row.logit_contribution)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {inspect.vocab_contribution_promoted.length === 0 ? (
+                  <p className="ct-muted">No positive contributions.</p>
+                ) : null}
+              </div>
+            </div>
+            <div className="ct-readout-table">
+              <h3 className="ct-subheading">Strongest suppressed tokens</h3>
+              <div className="ct-table-wrap">
+                <table
+                  className="ct-table"
+                  data-testid="vocab-contribution-suppressed-table"
+                  aria-label="Strongest suppressed token contributions"
+                >
+                  <thead>
+                    <tr>
+                      <th>Rank</th>
+                      <th>Token</th>
+                      <th>ID</th>
+                      <th>Logit contribution</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {inspect.vocab_contribution_suppressed.map((row) => (
+                      <tr key={row.token_id}>
+                        <td>{row.rank}</td>
+                        <td>{row.text}</td>
+                        <td>{row.token_id}</td>
+                        <td>{signed(row.logit_contribution)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {inspect.vocab_contribution_suppressed.length === 0 ? (
+                  <p className="ct-muted">No negative contributions.</p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+          {inspect.view === "ablated" &&
+          inspect.vocab_contribution_movers.length > 0 ? (
+            <div className="ct-table-wrap">
+              <h3 className="ct-subheading">Attribution movement</h3>
+              <table
+                className="ct-table"
+                data-testid="vocab-contribution-comparison-table"
+                aria-label="Ablated vocabulary attribution movement"
+              >
+                <thead>
+                  <tr>
+                    <th>Token</th>
+                    <th>Baseline</th>
+                    <th>Ablated</th>
+                    <th>Delta</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {inspect.vocab_contribution_movers.map((row) => (
+                    <tr key={row.token_id}>
+                      <td>{row.text}</td>
+                      <td>{signed(row.baseline_contribution)}</td>
+                      <td>{signed(row.ablated_contribution)}</td>
+                      <td>{signed(row.delta)}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { callApi, CtApiError } from "./gradio";
+import { inspectNode } from "./client";
 
 function jsonResponse(status: number, body: unknown): Response {
   return {
@@ -68,6 +69,41 @@ describe("callApi", () => {
 
     await expect(callApi("options", [""])).rejects.toThrow(
       new CtApiError("The server returned no result for this request."),
+    );
+  });
+
+  it("appends the vocabulary contribution flag to inspect requests", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(200, { event_id: "evt-3" }))
+      .mockResolvedValueOnce(
+        sseResponse(200, 'event: complete\ndata: [{"state":"ready"}]\n\n'),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await inspectNode(
+      "blocks.0.attention_update",
+      1,
+      "baseline",
+      null,
+      false,
+      true,
+    );
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/gradio/gradio_api/call/inspect_node",
+      expect.objectContaining({
+        body: JSON.stringify({
+          data: [
+            "blocks.0.attention_update",
+            1,
+            "baseline",
+            null,
+            false,
+            true,
+          ],
+        }),
+      }),
     );
   });
 });

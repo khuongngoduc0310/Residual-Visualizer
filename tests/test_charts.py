@@ -9,6 +9,8 @@ from charts import (
     render_readout_delta,
     render_readout_topk,
     render_token_map_row,
+    render_vocab_contribution_delta,
+    render_vocab_contributions,
 )
 
 
@@ -121,3 +123,51 @@ def test_pattern_renderer_accepts_signed_difference_bounds():
     assert figure.data[0].zmax == 0.2
     assert figure.data[0].colorbar.title.text == "delta"
     assert figure.layout.title.text == "Pattern difference"
+
+
+def test_vocab_contribution_renderer_keeps_promotions_and_suppressions_signed():
+    figure = render_vocab_contributions(
+        [
+            {
+                "rank": 1,
+                "text": "world",
+                "token_id": 4,
+                "logit_contribution": 1.25,
+            }
+        ],
+        [
+            {
+                "rank": 1,
+                "text": "hello",
+                "token_id": 2,
+                "logit_contribution": -0.75,
+            }
+        ],
+        "1: comma",
+    )
+
+    assert list(figure.data[0].x) == [1.25, -0.75]
+    assert list(figure.data[0].marker.color) == ["#2563eb", "#dc2626"]
+    assert "logit contribution" in figure.data[0].hovertemplate
+    assert figure.layout.xaxis.title.text == "Direct logit contribution"
+    assert "probability" not in figure.data[0].hovertemplate
+
+
+def test_vocab_contribution_delta_uses_baseline_and_ablated_values():
+    figure = render_vocab_contribution_delta(
+        [
+            {
+                "text": "world",
+                "token_id": 4,
+                "baseline_contribution": 1.2,
+                "ablated_contribution": 0.8,
+                "delta": -0.4,
+            }
+        ],
+        "1: comma",
+    )
+
+    assert list(figure.data[0].x) == [-0.4]
+    assert list(figure.data[0].customdata[0]) == [1.2, 0.8]
+    assert "baseline contribution" in figure.data[0].hovertemplate
+    assert "probability" not in figure.layout.xaxis.title.text.lower()

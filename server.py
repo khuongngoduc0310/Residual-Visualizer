@@ -59,6 +59,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
             view: str = "baseline",
             highlight_token: Optional[str] = None,
             deembed: bool = False,
+            vocab_contributions: bool = False,
         ) -> dict:
             return inspect_node_payload(
                 manager,
@@ -67,6 +68,7 @@ def create_app(manager: Optional[ModelManager] = None) -> gr.Blocks:
                 view,
                 highlight_token,
                 deembed,
+                vocab_contributions,
             )
 
         def get_options(_unused: str = "") -> dict:
