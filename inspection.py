@@ -1,10 +1,11 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, Tuple
 
 import numpy as np
 import tensorflow as tf
 
 from checkpoint import LoadedCheckpoint
+from model import NUM_TRANSFORMER_BLOCKS
 
 
 class InspectionError(ValueError):
@@ -18,14 +19,14 @@ DEFAULT_NODE_KEY = "output_norm"
 #   components {token, position embeddings}
 #   stream_raw {input, after-attention, after-FFN}
 #   updates    {attention update, FFN update}
-#   stream_norm{attention_norm, output_norm}
+#   norm       {attention input, FFN input, final output norms}
 #   hidden     {FFN hidden}   (single, non-negative sequential scale)
 #   pattern    {attention pattern} (fixed 0..1)
 #   readout    {probabilities / entropy}
 COMPONENTS = "components"
 STREAM_RAW = "stream_raw"
 UPDATES = "updates"
-STREAM_NORM = "stream_norm"
+NORM = "norm"
 HIDDEN = "hidden"
 PATTERN = "pattern"
 READOUT = "readout"
@@ -40,9 +41,12 @@ class StreamNode:
     explanation: str
     normalized: bool = False
     feature_axis: bool = True
+    block_index: int | None = None
+    stage: str | None = None
+    width_source: str = "model"
 
 
-STREAM_NODES: Tuple[StreamNode, ...] = (
+SINGLE_BLOCK_NODE_TEMPLATES: Tuple[StreamNode, ...] = (
     StreamNode(
         key="token_embeddings",
         label="Token embeddings",
@@ -72,7 +76,20 @@ STREAM_NODES: Tuple[StreamNode, ...] = (
         family=STREAM_RAW,
         explanation=(
             "Token plus position embeddings: the residual stream as it enters "
-            "the transformer block. The attention heads read this value."
+            "the first transformer block. Its attention branch reads a "
+            "normalized copy of this value."
+        ),
+    ),
+    StreamNode(
+        key="attention_input_norm",
+        label="Layer norm - attention input",
+        kind="ln",
+        family=NORM,
+        normalized=True,
+        explanation=(
+            "The normalized copy of the residual stream read by causal "
+            "attention. The raw incoming stream bypasses this branch and is "
+            "preserved for the residual addition."
         ),
     ),
     StreamNode(
@@ -81,11 +98,12 @@ STREAM_NODES: Tuple[StreamNode, ...] = (
         kind="pattern",
         family=PATTERN,
         explanation=(
-            "Attention weights averaged over the heads, averaged over heads "
-            "when there are several. Row (query token) sums to about one; "
-            "columns to the right of each row are masked by causality."
+            "Attention weights computed from the normalized attention input "
+            "and averaged over heads. Each query row sums to about one; "
+            "future key columns are masked by causality."
         ),
         feature_axis=False,
+        width_source="none",
     ),
     StreamNode(
         key="attention_update",
@@ -93,9 +111,9 @@ STREAM_NODES: Tuple[StreamNode, ...] = (
         kind="update",
         family=UPDATES,
         explanation=(
-            "The value the causal attention heads write into the residual "
-            "stream. Adding this to the stream input produces the residual "
-            "stream after attention."
+            "The value causal attention computes from its normalized input. "
+            "Adding it to the raw incoming stream produces this block's "
+            "post-attention residual."
         ),
     ),
     StreamNode(
@@ -105,20 +123,20 @@ STREAM_NODES: Tuple[StreamNode, ...] = (
         family=STREAM_RAW,
         explanation=(
             "The residual stream after the attention update is added back to "
-            "the input embeddings. Feature magnitudes here combine the "
-            "embeddings with what attention just wrote."
+            "the block input. Feature magnitudes here combine the incoming "
+            "stream with what attention just wrote."
         ),
     ),
     StreamNode(
-        key="attention_norm",
-        label="Layer norm \u00b7 after attention",
+        key="ffn_input_norm",
+        label="Layer norm - FFN input",
         kind="ln",
-        family=STREAM_NORM,
+        family=NORM,
         normalized=True,
         explanation=(
-            "Layer normalization sits on the residual line and rescales every "
-            "token to unit variance, so magnitude comparisons across tokens "
-            "here are not meaningful."
+            "The normalized copy of the post-attention residual read by the "
+            "feed-forward network. The raw residual bypasses this branch and "
+            "is preserved for the next residual addition."
         ),
     ),
     StreamNode(
@@ -131,6 +149,7 @@ STREAM_NODES: Tuple[StreamNode, ...] = (
             "Values are non-negative; zero marks a dead neuron for that "
             "token."
         ),
+        width_source="ffn",
     ),
     StreamNode(
         key="ffn_update",
@@ -139,7 +158,7 @@ STREAM_NODES: Tuple[StreamNode, ...] = (
         family=UPDATES,
         explanation=(
             "The value the feed-forward network writes into the residual "
-            "stream. Adding this to the normalized attention output produces "
+            "stream. Adding this to the raw post-attention residual produces "
             "the residual stream after the FFN."
         ),
     ),
@@ -149,20 +168,20 @@ STREAM_NODES: Tuple[StreamNode, ...] = (
         kind="stream",
         family=STREAM_RAW,
         explanation=(
-            "The residual stream after the FFN update is added to the "
-            "normalized attention output. This is the value fed to the final "
-            "layer norm."
+            "The raw post-attention residual plus the FFN update. This is the "
+            "transformer block output; it flows into the next block or, after "
+            "the final block, the readout normalization."
         ),
     ),
     StreamNode(
         key="output_norm",
-        label="Layer norm \u00b7 block output",
+        label="Layer norm - readout input",
         kind="ln",
-        family=STREAM_NORM,
+        family=NORM,
         normalized=True,
         explanation=(
-            "The final layer-normalized block output. It is what the "
-            "vocabulary projection reads to predict the next token."
+            "A final model-level normalization of the raw block output. The "
+            "vocabulary projection reads this value to predict the next token."
         ),
     ),
     StreamNode(
@@ -176,7 +195,43 @@ STREAM_NODES: Tuple[StreamNode, ...] = (
             "strip shows how confident the model is at every token."
         ),
         feature_axis=False,
+        width_source="none",
     ),
+)
+
+BLOCK_NODE_STAGES: Tuple[str, ...] = (
+    "attention_input_norm",
+    "attention_pattern",
+    "attention_update",
+    "attention_residual",
+    "ffn_input_norm",
+    "ffn_hidden",
+    "ffn_update",
+    "ffn_residual",
+)
+
+
+def block_node_key(block_index: int, stage: str) -> str:
+    return f"blocks.{block_index}.{stage}"
+
+
+_GLOBAL_PREFIX_NODES = SINGLE_BLOCK_NODE_TEMPLATES[:3]
+_BLOCK_NODE_TEMPLATES = SINGLE_BLOCK_NODE_TEMPLATES[3:-2]
+_GLOBAL_SUFFIX_NODES = SINGLE_BLOCK_NODE_TEMPLATES[-2:]
+STREAM_NODES: Tuple[StreamNode, ...] = (
+    *_GLOBAL_PREFIX_NODES,
+    *(
+        replace(
+            node,
+            key=block_node_key(block_index, node.key),
+            label=f"Block {block_index + 1} - {node.label}",
+            block_index=block_index,
+            stage=node.key,
+        )
+        for block_index in range(NUM_TRANSFORMER_BLOCKS)
+        for node in _BLOCK_NODE_TEMPLATES
+    ),
+    *_GLOBAL_SUFFIX_NODES,
 )
 
 NODE_BY_KEY: Dict[str, StreamNode] = {node.key: node for node in STREAM_NODES}
@@ -187,63 +242,111 @@ CAPTURED_KEYS: Tuple[str, ...] = tuple(
     key for key in TRACE_ORDER if key != "readout"
 )
 
-# Central line through the model, in flow order.
-SPINE_STATES: Tuple[str, ...] = (
+# Raw states carried by the residual highway.
+RESIDUAL_STATES: Tuple[str, ...] = (
     "embedding",
-    "attention_residual",
-    "attention_norm",
-    "ffn_residual",
+    *(
+        block_node_key(block_index, stage)
+        for block_index in range(NUM_TRANSFORMER_BLOCKS)
+        for stage in ("attention_residual", "ffn_residual")
+    ),
+)
+
+# Main diagram path, including the final readout preparation node.
+SPINE_NODES: Tuple[str, ...] = (
+    *RESIDUAL_STATES,
     "output_norm",
 )
 
+DEEMBEDDABLE_NODES: Tuple[str, ...] = (*RESIDUAL_STATES, "output_norm")
+
 ABLATABLE_NODES: Tuple[str, ...] = (
     "embedding",
-    "attention_residual",
-    "attention_norm",
-    "ffn_hidden",
-    "ffn_residual",
+    *(
+        block_node_key(block_index, stage)
+        for block_index in range(NUM_TRANSFORMER_BLOCKS)
+        for stage in (
+            "attention_input_norm",
+            "attention_residual",
+            "ffn_input_norm",
+            "ffn_hidden",
+            "ffn_residual",
+        )
+    ),
     "output_norm",
 )
 ABLATION_MODES: Tuple[str, ...] = ("zero", "mean")
 ABLATION_SCOPES: Tuple[str, ...] = ("token", "all")
 
-# Describes the connector between successive spine states and where it starts
-# from line value (used for the branch wiring too).
 @dataclass(frozen=True)
-class SpineLink:
+class BranchSpec:
+    key: str
     label: str
-    branch_key: str | None
+    reads: str
+    adds_before: str
+    path: Tuple[str, ...]
+    observables: Tuple[str, ...] = ()
+    kind: str = "attention"
+    block_index: int = 0
+    side: str = "above"
 
 
-# Links between consecutive SPINE_STATES plus the readout at the end.
+# Links between consecutive SPINE_NODES plus the readout at the end.
 #   embedding -> attention_residual  : attention add junction
-#   attention_residual -> attention_norm : layer norm (in line)
-#   attention_norm -> ffn_residual   : ffn add junction
+#   attention_residual -> ffn_residual : FFN add junction
 #   ffn_residual -> output_norm      : layer norm (in line)
 #   output_norm -> readout           : projection + softmax
 SPINE_LINKS: Tuple[str, ...] = (
-    "attention-add",
-    "layer-norm",
-    "ffn-add",
+    *(
+        link
+        for _ in range(NUM_TRANSFORMER_BLOCKS)
+        for link in ("attention-add", "ffn-add")
+    ),
     "layer-norm",
     "readout",
 )
 
-BRANCHES: Tuple[Dict[str, object], ...] = (
-    {
-        "key": "attention",
-        "label": "Causal multi-head attention",
-        "reads": "embedding",
-        "adds_before": "attention_residual",
-        "nodes": ("attention_pattern", "attention_update"),
-    },
-    {
-        "key": "ffn",
-        "label": "Feed-forward network",
-        "reads": "attention_norm",
-        "adds_before": "ffn_residual",
-        "nodes": ("ffn_hidden", "ffn_update"),
-    },
+BRANCHES: Tuple[BranchSpec, ...] = (
+    *(
+        branch
+        for block_index in range(NUM_TRANSFORMER_BLOCKS)
+        for branch in (
+            BranchSpec(
+                key=f"block_{block_index}_attention",
+                label=f"Block {block_index + 1} causal multi-head attention",
+                reads=(
+                    "embedding"
+                    if block_index == 0
+                    else block_node_key(block_index - 1, "ffn_residual")
+                ),
+                adds_before=block_node_key(block_index, "attention_residual"),
+                path=(
+                    block_node_key(block_index, "attention_input_norm"),
+                    block_node_key(block_index, "attention_update"),
+                ),
+                observables=(
+                    block_node_key(block_index, "attention_pattern"),
+                ),
+                kind="attention",
+                block_index=block_index,
+                side="above",
+            ),
+            BranchSpec(
+                key=f"block_{block_index}_ffn",
+                label=f"Block {block_index + 1} feed-forward network",
+                reads=block_node_key(block_index, "attention_residual"),
+                adds_before=block_node_key(block_index, "ffn_residual"),
+                path=(
+                    block_node_key(block_index, "ffn_input_norm"),
+                    block_node_key(block_index, "ffn_hidden"),
+                    block_node_key(block_index, "ffn_update"),
+                ),
+                kind="ffn",
+                block_index=block_index,
+                side="below",
+            ),
+        )
+    ),
 )
 
 # The two decomposed embedding components that sum to the stream input.
@@ -272,11 +375,11 @@ class AblationError(ValueError):
 
 @dataclass(frozen=True)
 class AblationSpec:
-    node_key: str
-    dims: Tuple[int, ...]
-    mode: str
-    scope: str
-    position: int | None = None
+    node_key: str  # The node to ablate.
+    dims: Tuple[int, ...]  # Dimensions to ablate.
+    mode: str  # "zero" or "mean".
+    scope: str  # "token" or "all".
+    position: int | None = None  # Required for token-scoped ablation.
 
     def __post_init__(self) -> None:
         if self.node_key not in ABLATABLE_NODES:
@@ -338,7 +441,7 @@ def node_width(node_key: str, config) -> int:
         raise AblationError(f"Node cannot be ablated: {node_key}")
     return (
         config.feed_forward_dim
-        if node_key == "ffn_hidden"
+        if node_spec(node_key).width_source == "ffn"
         else config.embedding_dim
     )
 
@@ -420,6 +523,7 @@ def _apply_ablation(
     token_count: int,
 ) -> tf.Tensor:
     matrix = tf.squeeze(tensor, axis=0)
+    # Convert the requested feature dimensions into TensorFlow gather indices.
     dim_indices = tf.constant(ablation.dims, dtype=tf.int32)
     columns = tf.gather(matrix, dim_indices, axis=1)
     if ablation.mode == "zero":
@@ -510,39 +614,55 @@ def capture_locations(
     positions = tf.range(token_count)[None, :]
     position_embeddings = embedding_layer.pos_emb(positions)
     embeddings = token_embeddings + position_embeddings
-    interventions = None
+    ablation_node = node_spec(ablation.node_key) if ablation is not None else None
     if ablation is not None:
         if ablation.node_key == "embedding":
             embeddings = _apply_ablation(embeddings, ablation, token_count)
-        else:
+    locations = {
+        "token_embeddings": tf.squeeze(token_embeddings, axis=0),
+        "position_embeddings": tf.squeeze(position_embeddings, axis=0),
+        "embedding": tf.squeeze(embeddings, axis=0),
+    }
+    block_output = embeddings
+    for block_index in range(checkpoint.config.num_blocks):
+        interventions = None
+        if (
+            ablation is not None
+            and ablation_node.block_index == block_index
+            and ablation_node.stage is not None
+        ):
             interventions = {
-                ablation.node_key: lambda tensor: _apply_ablation(
+                ablation_node.stage: lambda tensor: _apply_ablation(
                     tensor,
                     ablation,
                     token_count,
                 )
             }
-    steps, attention_scores = model.get_layer(
-        "transformer_block"
-    ).call_steps(
-        embeddings,
-        training=False,
-        interventions=interventions,
-    )
-    block_output = steps["output_norm"]
-    probabilities = model.get_layer("token_probabilities")(block_output)
+        steps, attention_scores = model.get_layer(
+            f"transformer_block_{block_index}"
+        ).call_steps(
+            block_output,
+            training=False,
+            interventions=interventions,
+        )
+        pattern = tf.reduce_mean(attention_scores, axis=1)
+        locations[block_node_key(block_index, "attention_pattern")] = tf.squeeze(
+            pattern, axis=0
+        )
+        locations.update(
+            {
+                block_node_key(block_index, key): tf.squeeze(tensor, axis=0)
+                for key, tensor in steps.items()
+            }
+        )
+        block_output = steps["ffn_residual"]
 
-    pattern = tf.reduce_mean(attention_scores, axis=1)
-    locations = {
-        "token_embeddings": tf.squeeze(token_embeddings, axis=0),
-        "position_embeddings": tf.squeeze(position_embeddings, axis=0),
-        "embedding": tf.squeeze(embeddings, axis=0),
-        "attention_pattern": tf.squeeze(pattern, axis=0),
-        **{
-            key: tf.squeeze(tensor, axis=0)
-            for key, tensor in steps.items()
-        },
-    }
+    output_norm = model.get_layer("final_output_layer_norm")(block_output)
+    if ablation is not None and ablation.node_key == "output_norm":
+        output_norm = _apply_ablation(output_norm, ablation, token_count)
+    probabilities = model.get_layer("token_probabilities")(output_norm)
+
+    locations["output_norm"] = tf.squeeze(output_norm, axis=0)
     return CapturedRun(
         locations={key: value.numpy() for key, value in locations.items()},
         probabilities=tf.squeeze(probabilities, axis=0).numpy(),

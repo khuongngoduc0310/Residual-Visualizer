@@ -57,7 +57,7 @@ def render_token_map_row(
 ) -> go.Figure:
     """One heatmap row of per-token square maps.
 
-    Every token's width-256 vector is drawn as its own 16x16 tile and the
+    For example, a token's width-256 vector is drawn as its own 16x16 tile and the
     tiles are laid out left to right inside a single Heatmap trace, separated
     by one empty (transparent) column so adjacent tokens stay visually apart.
     One axis pair keeps rendering reliable."""

@@ -2,14 +2,13 @@ import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type { GraphNode, StreamGraph } from "../types";
 
-const VIEW_WIDTH = 1580;
-const VIEW_HEIGHT = 560;
+const MIN_VIEW_WIDTH = 1580;
+const VIEW_HEIGHT = 620;
 const SPINE_Y = 300;
 const CHIP_W = 170;
 const CHIP_H = 60;
 const SPINE_X0 = 360;
 const SPINE_STEP = 225;
-const READOUT_CX = 1495;
 const READOUT_W = 160;
 
 const COMPONENT_CY = [145, 205];
@@ -93,6 +92,12 @@ export function ResidualGraph({
     () => graph.spine.map((_key, index) => SPINE_X0 + index * SPINE_STEP),
     [graph],
   );
+  const lastChipX = spineXs[spineXs.length - 1] ?? SPINE_X0;
+  const readoutCx = lastChipX + SPINE_STEP;
+  const viewWidth = Math.max(
+    MIN_VIEW_WIDTH,
+    readoutCx + READOUT_W / 2 + 5,
+  );
 
   function spineIndex(key: string): number {
     const index = graph.spine.indexOf(key);
@@ -123,6 +128,7 @@ export function ResidualGraph({
         : KIND_STROKE[node.kind] ?? "#cbd5e1";
     return (
       <g
+        key={key}
         role="button"
         aria-label={node.label}
         tabIndex={selectable ? 0 : -1}
@@ -184,9 +190,16 @@ export function ResidualGraph({
     );
   }
 
-  function renderArrow(x1: number, y1: number, x2: number, y2: number) {
+  function renderArrow(
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    key?: string,
+  ) {
     return (
       <line
+        key={key}
         x1={x1}
         y1={y1}
         x2={x2}
@@ -234,7 +247,6 @@ export function ResidualGraph({
     </defs>,
   );
 
-  const lastChipX = spineXs[spineXs.length - 1];
   items.push(
     <line
       key="spine-line"
@@ -254,7 +266,15 @@ export function ResidualGraph({
     const cx = 150;
     const cy = COMPONENT_CY[index];
     items.push(renderChip(key, cx, cy, 140, 42, node, 9.5));
-    items.push(renderArrow(cx + 70, cy, spineXs[0] - CHIP_W / 2, SPINE_Y));
+    items.push(
+      renderArrow(
+        cx + 70,
+        cy,
+        spineXs[0] - CHIP_W / 2,
+        SPINE_Y,
+        `component-arrow-${key}`,
+      ),
+    );
   });
 
   // The stream-state chips along the central line.
@@ -264,8 +284,8 @@ export function ResidualGraph({
     items.push(renderChip(key, spineXs[index], SPINE_Y, CHIP_W, CHIP_H, node, 11));
   });
 
-  // Operation markers between the stream-state chips: layer norms and
-  // softmax sit as pills above the line, "add" junctions as dark taps on it.
+  // Operation markers between residual states are add junctions. The final
+  // output norm and softmax remain on the main path after the blocks.
   const renderOperationPill = (
     index: number,
     midX: number,
@@ -350,31 +370,35 @@ export function ResidualGraph({
     );
   };
 
-  // Branch containers: attention hangs above the early line, the FFN below
-  // the post-attention norm. Read arrows enter the edge facing the stream;
-  // write arrows leave the same edge and land on their add junction.
+  // Pre-norm branches read a raw residual state through their first path node,
+  // then write back at an add junction while the residual line bypasses them.
   graph.branches.forEach((branch) => {
     const readIndex = spineIndex(branch.reads);
     const addIndex = spineIndex(branch.adds_before) - 1;
     if (readIndex < 0 || addIndex < 0) return;
     const readX = spineXs[readIndex];
     const addX = (spineXs[addIndex] + spineXs[addIndex + 1]) / 2;
-    const isAttention = branch.key === "attention";
-    const containerY = isAttention ? 104 : 396;
-    const containerH = isAttention ? 112 : 116;
+    const isAttention = branch.kind === "attention";
+    const isAbove = branch.side === "above";
+    const containerY = isAbove ? 54 : 390;
+    const containerH = isAttention ? 172 : 174;
     const centerX = (readX + addX) / 2;
-    const containerW = 300;
+    const containerW = isAttention ? 380 : 300;
     const containerLeft = centerX - containerW / 2;
     const innerW = containerW - 40;
-    const children = branch.nodes
+    const pathNodes = branch.path
       .map((key) => nodeByKey.get(key))
       .filter((node): node is GraphNode => node !== undefined);
-    const readTipY = isAttention ? containerY + containerH : containerY;
-    const writeStartY = isAttention ? containerY + containerH : containerY;
-    const writeEndY = SPINE_Y;
+    const observableNodes = branch.observables
+      .map((key) => nodeByKey.get(key))
+      .filter((node): node is GraphNode => node !== undefined);
+    const pathX = observableNodes.length ? centerX - 72 : centerX;
+    const pathWidth = observableNodes.length ? 190 : innerW;
+    const firstPathY = containerY + 36;
+    const lastPathY = firstPathY + (pathNodes.length - 1) * 44;
 
     items.push(
-      <g key={`branch-${branch.key}`}>
+      <g key={`branch-${branch.key}`} data-branch={branch.key}>
         <rect
           x={containerLeft}
           y={containerY}
@@ -387,7 +411,7 @@ export function ResidualGraph({
         />
         <text
           x={centerX}
-          y={isAttention ? containerY - 9 : containerY + containerH + 19}
+          y={isAbove ? containerY - 9 : containerY + containerH + 19}
           textAnchor="middle"
           fontSize={11}
           fontWeight={700}
@@ -395,32 +419,74 @@ export function ResidualGraph({
         >
           {branch.label}
         </text>
-        {children.map((node, childIndex) =>
+        {pathNodes.slice(0, -1).map((node, pathIndex) => (
+          <g key={`path-arrow-${node.key}`}>
+            {renderArrow(
+              pathX,
+              containerY + 54 + pathIndex * 44,
+              pathX,
+              containerY + 62 + pathIndex * 44,
+            )}
+          </g>
+        ))}
+        {pathNodes.map((node, childIndex) =>
           renderChip(
             node.key,
-            centerX,
+            pathX,
             containerY + 36 + childIndex * 44,
-            innerW,
+            pathWidth,
             36,
             node,
             10,
           ),
         )}
-        {isAttention ? (
+        {observableNodes.map((node, observableIndex) => (
+          <g key={`observable-${node.key}`}>
+            <line
+              x1={pathX + pathWidth / 2}
+              y1={containerY + 80}
+              x2={centerX + 72}
+              y2={containerY + 80 + observableIndex * 42}
+              stroke="#94a3b8"
+              strokeWidth={1.2}
+              strokeDasharray="3 3"
+            />
+            {renderChip(
+              node.key,
+              centerX + 120,
+              containerY + 80 + observableIndex * 42,
+              94,
+              36,
+              node,
+              8.5,
+            )}
+          </g>
+        ))}
+        {isAbove ? (
           renderArrow(
             readX,
             SPINE_Y - CHIP_H / 2,
-            readX,
-            readTipY + 2,
+            pathX,
+            firstPathY + 20,
           )
         ) : (
-          renderArrow(readX, SPINE_Y + CHIP_H / 2, readX, readTipY - 2)
+          renderArrow(
+            readX,
+            SPINE_Y + CHIP_H / 2,
+            pathX,
+            firstPathY - 20,
+          )
         )}
-        {isAttention
+        {isAbove
           ? renderArrowLabel(readX - 10, 246, "reads", "end")
           : renderArrowLabel(readX - 10, 360, "reads", "end")}
-        {renderArrow(addX, writeStartY, addX, writeEndY)}
-        {isAttention
+        {renderArrow(
+          pathX,
+          isAbove ? lastPathY + 20 : lastPathY - 20,
+          addX,
+          SPINE_Y,
+        )}
+        {isAbove
           ? renderArrowLabel(addX - 10, 256, "writes", "end")
           : renderArrowLabel(addX + 10, 342, "writes", "start")}
       </g>,
@@ -440,10 +506,18 @@ export function ResidualGraph({
   // Readout chip at the end of the line, reached by its own arrow.
   const readout = nodeByKey.get("readout");
   if (readout) {
-    const readoutLeft = READOUT_CX - READOUT_W / 2;
+    const readoutLeft = readoutCx - READOUT_W / 2;
     const arrowStart = lastChipX + CHIP_W / 2 + 2;
     const arrowEnd = readoutLeft - 3;
-    items.push(renderArrow(arrowStart, SPINE_Y, arrowEnd, SPINE_Y));
+    items.push(
+      renderArrow(
+        arrowStart,
+        SPINE_Y,
+        arrowEnd,
+        SPINE_Y,
+        "readout-arrow",
+      ),
+    );
     items.push(
       renderOperationPill(
         graph.spine.length - 1,
@@ -454,7 +528,7 @@ export function ResidualGraph({
       ),
     );
     items.push(
-      renderChip("readout", READOUT_CX, SPINE_Y, READOUT_W, CHIP_H, readout, 10),
+      renderChip("readout", readoutCx, SPINE_Y, READOUT_W, CHIP_H, readout, 10),
     );
   }
 
@@ -467,7 +541,9 @@ export function ResidualGraph({
       <div className="ct-graph-scroll">
         <svg
           className="ct-graph-svg"
-          viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
+          width={viewWidth}
+          height={VIEW_HEIGHT}
+          viewBox={`0 0 ${viewWidth} ${VIEW_HEIGHT}`}
           data-testid="residual-graph"
           role="group"
           aria-label="Residual stream wiring diagram"

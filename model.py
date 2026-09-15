@@ -6,7 +6,9 @@ import tensorflow as tf
 from tensorflow.keras import layers, losses, models
 
 
-ARCHITECTURE_NAME = "one_block_post_norm_causal_lm"
+ARCHITECTURE_NAME = "three_block_pre_norm_causal_lm"
+NUM_TRANSFORMER_BLOCKS = 3
+FEED_FORWARD_ACTIVITY_L1 = 1e-5
 
 
 @dataclass(frozen=True)
@@ -20,6 +22,8 @@ class ModelConfig:
     dropout_rate: float = 0.1
     feed_forward_activation: str = "relu"
     layer_norm_epsilon: float = 1e-6
+    num_blocks: int = NUM_TRANSFORMER_BLOCKS
+    feed_forward_activity_l1: float = FEED_FORWARD_ACTIVITY_L1
 
     def __post_init__(self) -> None:
         positive_integers = {
@@ -29,6 +33,7 @@ class ModelConfig:
             "num_heads": self.num_heads,
             "key_dim": self.key_dim,
             "feed_forward_dim": self.feed_forward_dim,
+            "num_blocks": self.num_blocks,
         }
         for name, value in positive_integers.items():
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
@@ -45,10 +50,22 @@ class ModelConfig:
         if self.feed_forward_activation != "relu":
             raise ValueError("feed_forward_activation must be 'relu'")
         if (
+            isinstance(self.num_blocks, bool)
+            or not isinstance(self.num_blocks, int)
+            or self.num_blocks != NUM_TRANSFORMER_BLOCKS
+        ):
+            raise ValueError(
+                f"num_blocks must be {NUM_TRANSFORMER_BLOCKS} for this architecture"
+            )
+        if (
             not math.isfinite(self.layer_norm_epsilon)
             or self.layer_norm_epsilon <= 0
         ):
             raise ValueError("layer_norm_epsilon must be positive")
+        if self.feed_forward_activity_l1 != FEED_FORWARD_ACTIVITY_L1:
+            raise ValueError(
+                f"feed_forward_activity_l1 must be {FEED_FORWARD_ACTIVITY_L1}"
+            )
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -95,6 +112,7 @@ class TransformerBlock(layers.Layer):
         dropout_rate=0.1,
         feed_forward_activation="relu",
         layer_norm_epsilon=1e-6,
+        feed_forward_activity_l1=FEED_FORWARD_ACTIVITY_L1,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -105,6 +123,7 @@ class TransformerBlock(layers.Layer):
         self.dropout_rate = dropout_rate
         self.feed_forward_activation = feed_forward_activation
         self.layer_norm_epsilon = layer_norm_epsilon
+        self.feed_forward_activity_l1 = feed_forward_activity_l1
 
         self.attn = layers.MultiHeadAttention(
             num_heads=num_heads,
@@ -113,9 +132,9 @@ class TransformerBlock(layers.Layer):
             name="causal_attention",
         )
         self.dropout_1 = layers.Dropout(dropout_rate, name="attention_dropout")
-        self.ln_1 = layers.LayerNormalization(
+        self.attention_input_norm = layers.LayerNormalization(
             epsilon=layer_norm_epsilon,
-            name="attention_layer_norm",
+            name="attention_input_layer_norm",
         )
         self.ffn_1 = layers.Dense(
             ff_dim,
@@ -124,20 +143,27 @@ class TransformerBlock(layers.Layer):
         )
         self.ffn_2 = layers.Dense(embed_dim, name="feed_forward_output")
         self.dropout_2 = layers.Dropout(dropout_rate, name="feed_forward_dropout")
-        self.ln_2 = layers.LayerNormalization(
+        self.ffn_input_norm = layers.LayerNormalization(
             epsilon=layer_norm_epsilon,
-            name="output_layer_norm",
+            name="ffn_input_layer_norm",
         )
 
     def call(self, inputs, training=None):
-        steps, attention_scores = self.call_steps(inputs, training)
-        return steps["output_norm"], attention_scores
+        residual, token_ids = inputs
+        token_mask = tf.not_equal(token_ids, 0)
+        steps, attention_scores = self.call_steps(
+            residual,
+            training,
+            token_mask=token_mask,
+        )
+        return steps["ffn_residual"], attention_scores
 
     def call_steps(
         self,
         inputs,
         training=None,
         interventions: Mapping[str, Callable[[tf.Tensor], tf.Tensor]] | None = None,
+        token_mask: tf.Tensor | None = None,
     ):
         """Run every stage, returning each intermediate named after its
         diagram stage plus the attention scores.
@@ -163,9 +189,13 @@ class TransformerBlock(layers.Layer):
             seq_len,
             tf.bool,
         )
+        normalized_attention_input = self.attention_input_norm(inputs)
+        normalized_attention_input = apply_intervention(
+            "attention_input_norm", normalized_attention_input
+        )
         attention_output, attention_scores = self.attn(
-            inputs,
-            inputs,
+            normalized_attention_input,
+            normalized_attention_input,
             attention_mask=causal_mask,
             return_attention_scores=True,
             training=training,
@@ -175,34 +205,41 @@ class TransformerBlock(layers.Layer):
         attention_residual = apply_intervention(
             "attention_residual", attention_residual
         )
-        normalized_attention = self.ln_1(attention_residual)
-        normalized_attention = apply_intervention(
-            "attention_norm", normalized_attention
+        normalized_ffn_input = self.ffn_input_norm(attention_residual)
+        normalized_ffn_input = apply_intervention(
+            "ffn_input_norm", normalized_ffn_input
         )
 
-        feed_forward_hidden = self.ffn_1(normalized_attention)
+        feed_forward_hidden = self.ffn_1(normalized_ffn_input)
         feed_forward_hidden = apply_intervention(
             "ffn_hidden", feed_forward_hidden
         )
+        if token_mask is not None and self.feed_forward_activity_l1:
+            mask = tf.cast(token_mask[..., None], feed_forward_hidden.dtype)
+            batch_size = tf.cast(tf.shape(feed_forward_hidden)[0], tf.float32)
+            activity = tf.cast(tf.abs(feed_forward_hidden) * mask, tf.float32)
+            self.add_loss(
+                self.feed_forward_activity_l1
+                * tf.reduce_sum(activity)
+                / batch_size
+            )
         feed_forward_update = self.ffn_2(feed_forward_hidden)
         feed_forward_update = self.dropout_2(
             feed_forward_update,
             training=training,
         )
-        feed_forward_residual = normalized_attention + feed_forward_update
+        feed_forward_residual = attention_residual + feed_forward_update
         feed_forward_residual = apply_intervention(
             "ffn_residual", feed_forward_residual
         )
-        output = self.ln_2(feed_forward_residual)
-        output = apply_intervention("output_norm", output)
         return {
+            "attention_input_norm": normalized_attention_input,
             "attention_update": attention_update,
             "attention_residual": attention_residual,
-            "attention_norm": normalized_attention,
+            "ffn_input_norm": normalized_ffn_input,
             "ffn_hidden": feed_forward_hidden,
             "ffn_update": feed_forward_update,
             "ffn_residual": feed_forward_residual,
-            "output_norm": output,
         }, attention_scores
 
     def get_config(self):
@@ -216,6 +253,7 @@ class TransformerBlock(layers.Layer):
                 "dropout_rate": self.dropout_rate,
                 "feed_forward_activation": self.feed_forward_activation,
                 "layer_norm_epsilon": self.layer_norm_epsilon,
+                "feed_forward_activity_l1": self.feed_forward_activity_l1,
             }
         )
         return config
@@ -267,21 +305,28 @@ def build_model(config: ModelConfig) -> models.Model:
         embed_dim=config.embedding_dim,
         name="token_and_position_embedding",
     )(token_ids)
-    block_output, _ = TransformerBlock(
-        num_heads=config.num_heads,
-        key_dim=config.key_dim,
-        embed_dim=config.embedding_dim,
-        ff_dim=config.feed_forward_dim,
-        dropout_rate=config.dropout_rate,
-        feed_forward_activation=config.feed_forward_activation,
-        layer_norm_epsilon=config.layer_norm_epsilon,
-        name="transformer_block",
-    )(embeddings)
+    block_output = embeddings
+    for block_index in range(config.num_blocks):
+        block_output, _ = TransformerBlock(
+            num_heads=config.num_heads,
+            key_dim=config.key_dim,
+            embed_dim=config.embedding_dim,
+            ff_dim=config.feed_forward_dim,
+            dropout_rate=config.dropout_rate,
+            feed_forward_activation=config.feed_forward_activation,
+            layer_norm_epsilon=config.layer_norm_epsilon,
+            feed_forward_activity_l1=config.feed_forward_activity_l1,
+            name=f"transformer_block_{block_index}",
+        )([block_output, token_ids])
+    normalized_output = layers.LayerNormalization(
+        epsilon=config.layer_norm_epsilon,
+        name="final_output_layer_norm",
+    )(block_output)
     probabilities = layers.Dense(
         config.vocab_size,
         activation="softmax",
         name="token_probabilities",
-    )(block_output)
+    )(normalized_output)
     return models.Model(
         inputs=token_ids,
         outputs=probabilities,

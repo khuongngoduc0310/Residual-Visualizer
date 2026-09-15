@@ -17,10 +17,8 @@ import type {
 import "./App.css";
 
 const AWAITING_COPY = "Analyze a prompt to capture every internal location.";
-
 export const DEFAULT_CHECKPOINT =
-  import.meta.env.VITE_DEFAULT_CHECKPOINT ??
-  "C:\\Projects\\Circuit Tracer\\checkpoints\\checkpoint-20260902-204728-v2";
+  import.meta.env.VITE_DEFAULT_CHECKPOINT ?? "";
 
 function errorMessage(error: unknown): string {
   return error instanceof CtApiError || error instanceof Error
@@ -92,7 +90,7 @@ export function App() {
   const [view, setView] = useState<InspectView>("baseline");
   const [activeAblation, setActiveAblation] = useState<AblationInfo | null>(null);
   const [deembedEnabled, setDeembedEnabled] = useState(false);
-  const [ablationNode, setAblationNode] = useState("ffn_hidden");
+  const [ablationNode, setAblationNode] = useState("");
   const [ablationDimsText, setAblationDimsText] = useState("0");
   const [ablationMode, setAblationMode] = useState<"zero" | "mean">("zero");
   const [ablationScope, setAblationScope] = useState<"token" | "all">("token");
@@ -108,7 +106,16 @@ export function App() {
     engine
       .getOptions()
       .then((loaded) => {
-        if (!cancelled) setOptions(loaded);
+        if (!cancelled) {
+          setOptions(loaded);
+          setAblationNode(
+            (current) =>
+              current ||
+              loaded.ablation_nodes.find((node) => node.kind === "hidden")?.key ||
+              loaded.ablation_nodes[0]?.key ||
+              "",
+          );
+        }
       })
       .catch((error) => {
         if (!cancelled) setLoadError(errorMessage(error));
@@ -306,10 +313,13 @@ export function App() {
   }
 
   async function handleAblate(): Promise<void> {
+    const widthSource = nodeByKey.get(ablationNode)?.width_source;
     const width =
-      ablationNode === "ffn_hidden"
+      widthSource === "ffn"
         ? loadResult?.meta.feed_forward_dim
-        : loadResult?.meta.embedding_dim;
+        : widthSource === "model"
+          ? loadResult?.meta.embedding_dim
+          : null;
     const parsed = parseAblationDimensions(ablationDimsText, width);
     if (parsed.error) {
       setAblationError(parsed.error);
@@ -397,10 +407,13 @@ export function App() {
   const selectedNodeKey =
     inspectReady && inspectResult?.node ? inspectResult.node.key : effectiveKey;
   const hasAblation = Boolean(activeAblation);
+  const ablationWidthSource = nodeByKey.get(ablationNode)?.width_source;
   const ablationWidth =
-    ablationNode === "ffn_hidden"
+    ablationWidthSource === "ffn"
       ? loadResult?.meta.feed_forward_dim
-      : loadResult?.meta.embedding_dim;
+      : ablationWidthSource === "model"
+        ? loadResult?.meta.embedding_dim
+        : null;
   const parsedAblation = parseAblationDimensions(
     ablationDimsText,
     ablationWidth,
@@ -411,7 +424,7 @@ export function App() {
     <div className={focused ? "ct-page ct-page-focused" : "ct-page"}>
       <header className="ct-header">
         <div className="ct-heading">
-          <p className="ct-kicker">RESIDUAL STREAM / ONE-BLOCK TRANSFORMER</p>
+          <p className="ct-kicker">RESIDUAL STREAM / THREE-BLOCK TRANSFORMER</p>
           <h1 className="ct-title">Circuit Tracer</h1>
           <p className="ct-subtitle">
             Watch the residual stream flow, and the writes that shape it.
@@ -435,7 +448,7 @@ export function App() {
               id="checkpoint-path"
               className="ct-text-input"
               type="text"
-              placeholder={"C:\\...\\checkpoint-v2"}
+              placeholder={"C:\\...\\checkpoint-v3"}
               value={checkpointPath}
               onChange={(event) => setCheckpointPath(event.target.value)}
             />
@@ -478,6 +491,10 @@ export function App() {
                     <dd>{formatCount(loadResult.meta.embedding_dim)}</dd>
                   </div>
                   <div>
+                    <dt>Transformer blocks</dt>
+                    <dd>{formatCount(loadResult.meta.num_blocks)}</dd>
+                  </div>
+                  <div>
                     <dt>Attention</dt>
                     <dd>
                       {formatCount(loadResult.meta.num_heads)} heads x{" "}
@@ -487,6 +504,10 @@ export function App() {
                   <div>
                     <dt>FFN width</dt>
                     <dd>{formatCount(loadResult.meta.feed_forward_dim)}</dd>
+                  </div>
+                  <div>
+                    <dt>FFN activity L1</dt>
+                    <dd>{formatCount(loadResult.meta.feed_forward_activity_l1)}</dd>
                   </div>
                   <div>
                     <dt>Checkpoint</dt>
@@ -703,7 +724,7 @@ export function App() {
               <div>
                 <h2 className="ct-section-label">THE MODEL</h2>
                 <h3 className="ct-panel-title">
-                  One residual line, two parallel writes
+                  One residual line, six residual writes
                 </h3>
               </div>
               <div className="ct-panel-head-actions">

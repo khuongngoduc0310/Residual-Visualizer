@@ -11,10 +11,14 @@ import inspection_views
 import server
 from checkpoint import CONFIG_FILENAME, CheckpointError, LoadedCheckpoint, save_checkpoint
 from inspection import (
+    ABLATABLE_NODES,
+    BRANCHES,
     DEFAULT_NODE_KEY,
     EMBEDDING_COMPONENTS,
+    SPINE_NODES,
     STREAM_NODES,
     TRACE_ORDER,
+    block_node_key,
 )
 from model import ARCHITECTURE_NAME, ModelConfig, build_model
 
@@ -66,6 +70,10 @@ def node_keys():
     return [node.key for node in STREAM_NODES]
 
 
+def block0(stage):
+    return block_node_key(0, stage)
+
+
 # --------------------------------------------------------------------------- #
 # Checkpoint loading payloads
 
@@ -87,8 +95,10 @@ def test_load_payload_loads_checkpoint_and_describes_the_model(tmp_path):
     assert payload["meta"]["num_heads"] == config.num_heads
     assert payload["meta"]["key_dim"] == config.key_dim
     assert payload["meta"]["feed_forward_dim"] == config.feed_forward_dim
+    assert payload["meta"]["num_blocks"] == 3
+    assert payload["meta"]["feed_forward_activity_l1"] == 1e-5
     assert payload["device_label"] == "CPU"
-    assert "one_block_post_norm_causal_lm" in payload["summary"]
+    assert "three_block_pre_norm_causal_lm" in payload["summary"]
     assert manager.loaded_state is not None
     assert manager.loaded_state.checkpoint.config == config
 
@@ -346,7 +356,7 @@ def test_ablation_requires_a_loaded_analysis():
 
     payload = engine.ablate_feature_payload(
         manager,
-        "ffn_hidden",
+        block0("ffn_hidden"),
         [0],
         "zero",
         "all",
@@ -362,7 +372,7 @@ def test_ablation_stores_a_capture_and_exposes_comparisons(tmp_path):
 
     result = engine.ablate_feature_payload(
         manager,
-        "ffn_hidden",
+        block0("ffn_hidden"),
         [0, 2],
         "zero",
         "token",
@@ -376,14 +386,14 @@ def test_ablation_stores_a_capture_and_exposes_comparisons(tmp_path):
 
     diff = inspection_views.inspect_node_payload(
         manager,
-        "ffn_hidden",
+        block0("ffn_hidden"),
         1,
         "diff",
     )
     assert diff["state"] == "ready"
     assert diff["view"] == "diff"
     assert diff["map_figure"]["data"]
-    assert diff["ablation"]["node_key"] == "ffn_hidden"
+    assert diff["ablation"]["node_key"] == block0("ffn_hidden")
 
     readout = inspection_views.inspect_node_payload(
         manager,
@@ -459,7 +469,7 @@ def test_deembedding_projects_residual_state_through_output_matrix(tmp_path):
 
     hidden = inspection_views.inspect_node_payload(
         manager,
-        "ffn_hidden",
+        block0("ffn_hidden"),
         1,
         "baseline",
         None,
@@ -469,13 +479,45 @@ def test_deembedding_projects_residual_state_through_output_matrix(tmp_path):
     assert hidden["deembed_present"] is False
 
 
+def test_deembedding_normalizes_raw_residual_states_before_projection(tmp_path):
+    manager, _ = analyze_fixture(tmp_path)
+    payload = inspection_views.inspect_node_payload(
+        manager, block0("ffn_residual"), 1, "baseline", None, True
+    )
+    checkpoint = manager.loaded_state.checkpoint
+    raw_vector = manager.inspection_session.analysis.capture.locations[
+        block0("ffn_residual")
+    ][1]
+    final_norm = checkpoint.model.get_layer("final_output_layer_norm")
+    normalized = final_norm(raw_vector[None, None, :]).numpy()[0, 0]
+    kernel, bias = checkpoint.model.get_layer(
+        "token_probabilities"
+    ).get_weights()
+    logits = normalized @ kernel + bias
+    expected = np.exp(logits - np.max(logits))
+    expected /= np.sum(expected)
+
+    assert payload["deembed_present"] is True
+    assert payload["deembed_top"][0]["token_id"] == int(np.argmax(expected))
+    assert payload["deembed_top"][0]["probability"] == pytest.approx(
+        float(np.max(expected)), rel=1e-5
+    )
+
+
 def test_deembedding_compares_baseline_and_ablated_residual_states(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
-    engine.ablate_feature_payload(manager, "ffn_hidden", [0], "zero", "token", 1)
+    engine.ablate_feature_payload(
+        manager,
+        block0("ffn_hidden"),
+        list(range(manager.loaded_state.checkpoint.config.feed_forward_dim)),
+        "zero",
+        "token",
+        1,
+    )
 
     payload = inspection_views.inspect_node_payload(
         manager,
-        "ffn_residual",
+        block0("ffn_residual"),
         1,
         "ablated",
         None,
@@ -492,7 +534,7 @@ def test_deembedding_same_ablated_residual_keeps_projected_predictions(tmp_path)
     position = 1
     checkpoint = manager.loaded_state.checkpoint
     baseline_values = manager.inspection_session.analysis.capture.locations[
-        "ffn_residual"
+        block0("ffn_residual")
     ]
     projection = checkpoint.model.get_layer("token_probabilities")
     kernel = projection.get_weights()[0]
@@ -502,7 +544,7 @@ def test_deembedding_same_ablated_residual_keeps_projected_predictions(tmp_path)
 
     result = engine.ablate_feature_payload(
         manager,
-        "ffn_residual",
+        block0("ffn_residual"),
         [dimension],
         "zero",
         "token",
@@ -510,7 +552,7 @@ def test_deembedding_same_ablated_residual_keeps_projected_predictions(tmp_path)
     )
     payload = inspection_views.inspect_node_payload(
         manager,
-        "ffn_residual",
+        block0("ffn_residual"),
         position,
         "ablated",
         None,
@@ -519,7 +561,7 @@ def test_deembedding_same_ablated_residual_keeps_projected_predictions(tmp_path)
 
     assert result["ok"]
     assert manager.inspection_session.ablated.analysis.capture.locations[
-        "ffn_residual"
+        block0("ffn_residual")
     ][position, dimension] == 0.0
     assert payload["deembed_present"] is True
     assert payload["deembed_state_changed"] is True
@@ -578,11 +620,11 @@ def test_inspect_returns_capture_defaults(tmp_path):
     assert payload["ok"]
     assert payload["state"] == "ready"
     assert payload["node"]["key"] == DEFAULT_NODE_KEY
-    assert payload["node"]["label"] == "Layer norm \u00b7 block output"
-    assert payload["node"]["family"] == "stream_norm"
+    assert payload["node"]["label"] == "Layer norm - readout input"
+    assert payload["node"]["family"] == "norm"
     assert payload["node"]["normalized"] is True
-    assert "layer-normalized block output" in payload["node"]["explanation"]
-    assert payload["node"]["prev_key"] == "ffn_residual"
+    assert "final model-level normalization" in payload["node"]["explanation"]
+    assert payload["node"]["prev_key"] == block_node_key(2, "ffn_residual")
     assert payload["node"]["next_key"] == "readout"
     assert payload["selected_position"] == 2
     assert payload["token_choices"] == [
@@ -614,10 +656,12 @@ def test_inspect_uses_stored_data_without_running_the_model(tmp_path):
     checkpoint = manager.loaded_state.checkpoint
     object.__setattr__(checkpoint, "model", ExplodingModel())
 
-    payload = inspection_views.inspect_node_payload(manager, "ffn_hidden", 1)
+    payload = inspection_views.inspect_node_payload(
+        manager, block0("ffn_hidden"), 1
+    )
 
     assert payload["state"] == "ready"
-    assert payload["node"]["key"] == "ffn_hidden"
+    assert payload["node"]["key"] == block0("ffn_hidden")
     assert payload["node"]["family"] == "hidden"
     assert payload["figure_kind"] == "hidden"
     assert payload["selected_position"] == 1
@@ -634,7 +678,7 @@ def test_inspect_can_switch_back_to_the_default_node(tmp_path):
     payload = inspection_views.inspect_node_payload(manager, "output_norm", 0)
 
     assert payload["node"]["key"] == "output_norm"
-    assert payload["node"]["label"] == "Layer norm \u00b7 block output"
+    assert payload["node"]["label"] == "Layer norm - readout input"
     assert payload["selected_position"] == 0
 
 
@@ -662,7 +706,7 @@ def test_each_node_normalizes_its_own_color_scale(tmp_path):
 
     embedding = inspection_views.inspect_node_payload(manager, "embedding", None)
     after_attention = inspection_views.inspect_node_payload(
-        manager, "attention_residual", None
+        manager, block0("attention_residual"), None
     )
 
     for payload in (embedding, after_attention):
@@ -674,7 +718,9 @@ def test_each_node_normalizes_its_own_color_scale(tmp_path):
 def test_attention_pattern_node_returns_pattern_view(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
-    payload = inspection_views.inspect_node_payload(manager, "attention_pattern", 1)
+    payload = inspection_views.inspect_node_payload(
+        manager, block0("attention_pattern"), 1
+    )
 
     assert payload["state"] == "ready"
     assert payload["node"]["kind"] == "pattern"
@@ -736,8 +782,12 @@ def test_load_payloads_are_json_serializable(tmp_path):
     manager = engine.ModelManager(device_detector=lambda: fake_device())
     loaded = engine.load_model_payload(manager, str(tmp_path))
     engine.analyze_prompt_payload(manager, "hello , world")
-    activation = inspection_views.inspect_node_payload(manager, "ffn_update", 1)
-    pattern = inspection_views.inspect_node_payload(manager, "attention_pattern", 1)
+    activation = inspection_views.inspect_node_payload(
+        manager, block0("ffn_update"), 1
+    )
+    pattern = inspection_views.inspect_node_payload(
+        manager, block0("attention_pattern"), 1
+    )
     readout = inspection_views.inspect_node_payload(manager, "readout", 2)
 
     for payload in (loaded, activation, pattern, readout):
@@ -772,37 +822,50 @@ def test_options_payload_describes_the_stream_graph():
     assert graph["default_node"] == DEFAULT_NODE_KEY
     keys = [node["key"] for node in graph["nodes"]]
     assert keys == list(TRACE_ORDER)
-    assert graph["spine"] == [
-        "embedding",
-        "attention_residual",
-        "attention_norm",
-        "ffn_residual",
-        "output_norm",
-    ]
+    assert graph["spine"] == list(SPINE_NODES)
     assert len(graph["spine_links"]) == len(graph["spine"])
     assert graph["trace"] == list(TRACE_ORDER)
     assert [branch["key"] for branch in graph["branches"]] == [
-        "attention",
-        "ffn",
+        branch.key for branch in BRANCHES
     ]
+    assert len(graph["branches"]) == 6
     attention = graph["branches"][0]
     assert attention["reads"] == "embedding"
-    assert attention["adds_before"] == "attention_residual"
-    assert attention["nodes"] == ["attention_pattern", "attention_update"]
-    assert graph["components"] == list(EMBEDDING_COMPONENTS)
-    assert [node["key"] for node in payload["ablation_nodes"]] == [
-        "embedding",
-        "attention_residual",
-        "attention_norm",
-        "ffn_hidden",
-        "ffn_residual",
-        "output_norm",
+    assert attention["adds_before"] == block0("attention_residual")
+    assert attention["path"] == [
+        block0("attention_input_norm"),
+        block0("attention_update"),
     ]
+    assert attention["observables"] == [block0("attention_pattern")]
+    assert attention["kind"] == "attention"
+    assert attention["block_index"] == 0
+    assert attention["side"] == "above"
+    ffn = graph["branches"][1]
+    assert ffn["reads"] == block0("attention_residual")
+    assert ffn["path"] == [
+        block0("ffn_input_norm"),
+        block0("ffn_hidden"),
+        block0("ffn_update"),
+    ]
+    assert ffn["observables"] == []
+    assert graph["branches"][-1]["block_index"] == 2
+    assert graph["components"] == list(EMBEDDING_COMPONENTS)
+    assert [node["key"] for node in payload["ablation_nodes"]] == list(
+        ABLATABLE_NODES
+    )
     output_norm = next(
         node for node in graph["nodes"] if node["key"] == "output_norm"
     )
     assert output_norm["normalized"] is True
     assert output_norm["next_key"] == "readout"
+    block_two_hidden = next(
+        node
+        for node in graph["nodes"]
+        if node["key"] == block_node_key(1, "ffn_hidden")
+    )
+    assert block_two_hidden["block_index"] == 1
+    assert block_two_hidden["stage"] == "ffn_hidden"
+    assert block_two_hidden["width_source"] == "ffn"
     assert payload["locations"][0]["key"] == "token_embeddings"
 
 

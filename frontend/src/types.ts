@@ -11,7 +11,7 @@ export type NodeFamily =
   | "components"
   | "stream_raw"
   | "updates"
-  | "stream_norm"
+  | "norm"
   | "hidden"
   | "pattern"
   | "readout";
@@ -29,6 +29,9 @@ export interface GraphNode {
   trace_count: number;
   prev_key: string | null;
   next_key: string | null;
+  block_index: number | null;
+  stage: string | null;
+  width_source: "model" | "ffn" | "none";
 }
 
 export interface GraphBranch {
@@ -36,7 +39,11 @@ export interface GraphBranch {
   label: string;
   reads: string;
   adds_before: string;
-  nodes: string[];
+  path: string[];
+  observables: string[];
+  kind: "attention" | "ffn";
+  block_index: number;
+  side: "above" | "below";
 }
 
 export interface StreamGraph {
@@ -72,6 +79,8 @@ export interface ModelMeta {
   key_dim: number | null;
   feed_forward_dim: number | null;
   dropout_rate: number | null;
+  num_blocks: number | null;
+  feed_forward_activity_l1: number | null;
 }
 
 export interface LoadPayload {

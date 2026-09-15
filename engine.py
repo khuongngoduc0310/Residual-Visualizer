@@ -123,6 +123,8 @@ def config_metadata(config: Optional[ModelConfig]) -> dict:
             "key_dim": None,
             "feed_forward_dim": None,
             "dropout_rate": None,
+            "num_blocks": None,
+            "feed_forward_activity_l1": None,
         }
     return {
         "architecture": ARCHITECTURE_NAME,
@@ -134,6 +136,8 @@ def config_metadata(config: Optional[ModelConfig]) -> dict:
         "key_dim": config.key_dim,
         "feed_forward_dim": config.feed_forward_dim,
         "dropout_rate": config.dropout_rate,
+        "num_blocks": config.num_blocks,
+        "feed_forward_activity_l1": config.feed_forward_activity_l1,
     }
 
 

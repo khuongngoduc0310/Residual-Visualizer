@@ -20,10 +20,11 @@ from engine import AblatedResult, ModelManager
 from inspection import (
     ABLATABLE_NODES,
     BRANCHES,
+    DEEMBEDDABLE_NODES,
     DEFAULT_NODE_KEY,
     EMBEDDING_COMPONENTS,
     SPINE_LINKS,
-    SPINE_STATES,
+    SPINE_NODES,
     STREAM_NODES,
     TRACE_ORDER,
     InspectionError,
@@ -64,7 +65,7 @@ def _clamp_position(position, token_count: int) -> int:
 
 
 def _graph_payload() -> dict:
-    """Return the declarative wiring of the one-block model."""
+    """Return the declarative wiring of the three-block model."""
     nodes = [
         {
             "key": spec.key,
@@ -74,7 +75,10 @@ def _graph_payload() -> dict:
             "explanation": spec.explanation,
             "normalized": spec.normalized,
             "feature_axis": spec.feature_axis,
-            "deembeddable": spec.key in SPINE_STATES,
+            "deembeddable": spec.key in DEEMBEDDABLE_NODES,
+            "block_index": spec.block_index,
+            "stage": spec.stage,
+            "width_source": spec.width_source,
         }
         for spec in STREAM_NODES
     ]
@@ -89,15 +93,19 @@ def _graph_payload() -> dict:
         )
     return {
         "nodes": nodes,
-        "spine": list(SPINE_STATES),
+        "spine": list(SPINE_NODES),
         "spine_links": list(SPINE_LINKS),
         "branches": [
             {
-                "key": branch["key"],
-                "label": branch["label"],
-                "reads": branch["reads"],
-                "adds_before": branch["adds_before"],
-                "nodes": list(branch["nodes"]),
+                "key": branch.key,
+                "label": branch.label,
+                "reads": branch.reads,
+                "adds_before": branch.adds_before,
+                "path": list(branch.path),
+                "observables": list(branch.observables),
+                "kind": branch.kind,
+                "block_index": branch.block_index,
+                "side": branch.side,
             }
             for branch in BRANCHES
         ],
@@ -119,7 +127,10 @@ def _node_info_payload(key: str) -> dict:
         "explanation": spec.explanation,
         "normalized": spec.normalized,
         "feature_axis": spec.feature_axis,
-        "deembeddable": key in SPINE_STATES,
+        "deembeddable": key in DEEMBEDDABLE_NODES,
+        "block_index": spec.block_index,
+        "stage": spec.stage,
+        "width_source": spec.width_source,
         "trace_index": index,
         "trace_count": len(trace),
         "prev_key": trace[index - 1] if index > 0 else None,
@@ -190,6 +201,7 @@ def _deembed_probabilities(
     values: np.ndarray,
     position: int,
     checkpoint: LoadedCheckpoint,
+    node_key: str,
 ) -> np.ndarray:
     projection = checkpoint.model.get_layer("token_probabilities")
     weights = projection.get_weights()
@@ -205,6 +217,9 @@ def _deembed_probabilities(
             "The selected residual state does not match the output projection "
             "width."
         )
+    if node_key != "output_norm":
+        final_norm = checkpoint.model.get_layer("final_output_layer_norm")
+        vector = final_norm(vector[None, None, :], training=False).numpy()[0, 0]
     logits = np.matmul(vector, kernel) + bias
     shifted = logits - np.max(logits)
     probabilities = np.exp(shifted)
@@ -228,6 +243,7 @@ def _populate_deembed_payload(
         baseline_values,
         position,
         checkpoint,
+        node_key,
     )
     if view == "ablated" and ablated_analysis is not None:
         ablated_values = ablated_analysis.capture.locations[node_key]
@@ -235,6 +251,7 @@ def _populate_deembed_payload(
             ablated_values,
             position,
             checkpoint,
+            node_key,
         )
         compare, highlighted_id = _readout_compare(
             baseline_probabilities[None, :],
@@ -502,7 +519,7 @@ def _inspect_node_payload(
         )
         return payload
 
-    if deembed and key in SPINE_STATES and view != "diff":
+    if deembed and key in DEEMBEDDABLE_NODES and view != "diff":
         _populate_deembed_payload(
             payload,
             state.checkpoint,

@@ -5,8 +5,8 @@ import engine
 import inspection_views
 from checkpoint import LoadedCheckpoint, load_checkpoint, save_checkpoint
 from charts import grid_shape
-from inspection import STREAM_NODES, TRACE_ORDER, capture_locations
-from model import ModelConfig, build_model
+from inspection import STREAM_NODES, TRACE_ORDER, block_node_key, capture_locations
+from model import NUM_TRANSFORMER_BLOCKS, ModelConfig, build_model
 
 
 VOCABULARY = ["", "[UNK]", "hello", ",", "world", "!"]
@@ -125,22 +125,30 @@ def test_residual_updates_equal_the_stream_difference():
     captured = _captured()
 
     locations = captured.locations
-    np.testing.assert_allclose(
-        locations["attention_update"],
-        locations["attention_residual"] - locations["embedding"],
-        atol=1e-6,
-    )
-    np.testing.assert_allclose(
-        locations["ffn_update"],
-        locations["ffn_residual"] - locations["attention_norm"],
-        atol=1e-6,
-    )
+    input_key = "embedding"
+    for block_index in range(NUM_TRANSFORMER_BLOCKS):
+        key = lambda stage: block_node_key(block_index, stage)
+        np.testing.assert_allclose(
+            locations[key("attention_update")],
+            locations[key("attention_residual")] - locations[input_key],
+            atol=1e-6,
+        )
+        np.testing.assert_allclose(
+            locations[key("ffn_update")],
+            locations[key("ffn_residual")]
+            - locations[key("attention_residual")],
+            atol=1e-6,
+        )
+        input_key = key("ffn_residual")
 
 
 def test_attention_pattern_rows_are_normalized_and_causal():
     captured = _captured()
 
-    pattern = captured.locations["attention_pattern"]
-    assert pattern.shape == (3, 3)
-    np.testing.assert_allclose(pattern.sum(axis=1), np.ones(3), atol=1e-5)
-    assert np.all(pattern[np.triu_indices(3, k=1)] == 0.0)
+    for block_index in range(NUM_TRANSFORMER_BLOCKS):
+        pattern = captured.locations[
+            block_node_key(block_index, "attention_pattern")
+        ]
+        assert pattern.shape == (3, 3)
+        np.testing.assert_allclose(pattern.sum(axis=1), np.ones(3), atol=1e-5)
+        assert np.all(pattern[np.triu_indices(3, k=1)] == 0.0)

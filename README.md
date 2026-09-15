@@ -1,6 +1,6 @@
 # Circuit Tracer
 
-Circuit Tracer is a local tool for inspecting a one-block TensorFlow language
+Circuit Tracer is a local tool for inspecting a three-block TensorFlow language
 model. The first development ticket establishes the shared model and checkpoint
 format used by both Google Colab training and the local inspection app.
 
@@ -87,9 +87,9 @@ engine underneath it; it stays bound to localhost with public sharing disabled:
 python app.py
 ```
 
-Open `http://127.0.0.1:7860` in a browser. The **Server path** is pre-filled
-with the included development checkpoint; replace it with your extracted
-folder path and press **Load Model**. The app validates all three files before
+Open `http://127.0.0.1:7860` in a browser. Enter an extracted pre-norm
+checkpoint folder in **Server path** and press **Load Model**. The app validates
+all three files before
 showing the model details and reports CUDA GPU or CPU based on TensorFlow's
 actual device visibility.
 
@@ -113,13 +113,13 @@ npm run dev
 Open `http://127.0.0.1:5173`; Vite hot-reloads React/CSS on every save and
 proxies the model endpoints to the engine on `127.0.0.1:7860`. A backend
 restart drops the in-memory model, so after an auto-restart press **Load
-Model** again in the browser (the checkpoint path stays pre-filled).
+Model** again in the browser (the checkpoint path stays in the form).
 
 For a quick UI check, use a desktop browser width of at least 1280px. Verify
-that expanding the model diagram shows one residual line with the attention
-and FFN branches, that analyzing a prompt selects the default **Layer norm ·
-block output** node, and that clicking the node-strip chips and the ◀ Previous
-/ Next ▶ controls move between captured states.
+that expanding the model diagram shows one residual line with six attention
+and FFN branches, that analyzing a prompt selects the default **Layer norm -
+readout input** node, and that clicking the node-strip chips and the Previous
+/ Next controls move between captured states.
 
 Loading a new checkpoint first releases the current model and clears the old
 details. If the replacement fails, no model remains active. TensorFlow may keep
@@ -148,17 +148,20 @@ The same Analyze Prompt run captures every internal tensor of the model, so you
 can move through the model without running inference again. Dropout is disabled
 during this run, so repeated runs are deterministic. The capture includes the
 decomposed token and position embeddings, the residual-stream states, the
-attention and FFN updates, the two layer norms, the causal attention pattern
-(mean over heads), and the FFN hidden activation.
+attention and FFN updates, all seven layer norms, each causal attention pattern
+(mean over heads), and each FFN hidden activation.
 
 The page is organized around the residual stream, but it keeps the map on
 screen: a compact **node strip** of chips sits directly above the captured
 state, and the full wiring diagram is collapsed by default so the strip and
 heatmap both fit the viewport. Press **Show model diagram** to expand the
-wiring any time. The residual stream is one horizontal line from the
-embeddings through the two "add" junctions and layer norms to the readout. The
-attention and FFN blocks hang off that line as parallel branches: they read
-the stream, compute, and write their output back at the add junction. Every
+wiring any time. The residual stream is one uninterrupted horizontal line from
+the embeddings through six add junctions to the raw final-block output,
+followed by the final readout norm. Each transformer block's attention and FFN
+computations hang off that line as
+pre-norm branches: they normalize a copy of the stream, compute an update, and
+write it back at the add junction while the raw stream bypasses the branch.
+Every
 node below is a captured state you can select either from the node strip or
 from its chip in the expanded diagram:
 
@@ -167,15 +170,25 @@ from its chip in the expanded diagram:
 | Token embeddings | component | one half of the stream input |
 | Position embeddings | component | the other half of the stream input |
 | Residual stream input | stream | token + position embeddings |
-| Causal attention pattern | pattern | query × key weights, mean over heads |
-| Attention output → residual | update | what attention writes into the stream |
-| Residual stream after attention | stream | stream input + attention update |
-| Layer norm after attention | ln | normalization sitting on the line |
-| FFN hidden (ReLU) | hidden | non-negative, sequential color scale |
-| FFN output → residual | update | what the FFN writes into the stream |
-| Residual stream after FFN | stream | normalized attention + FFN update |
-| Layer norm block output | ln | the value the readout reads |
+| Block N - Layer norm - attention input | ln | normalized branch input; raw stream bypasses it |
+| Block N - Causal attention pattern | pattern | query × key weights, mean over heads |
+| Block N - Attention output → residual | update | what attention writes into the stream |
+| Block N - Residual stream after attention | stream | prior stream + attention update |
+| Block N - Layer norm - FFN input | ln | normalized branch input; raw stream bypasses it |
+| Block N - FFN hidden (ReLU) | hidden | non-negative activation with training-time L1 |
+| Block N - FFN output → residual | update | what the FFN writes into the stream |
+| Block N - Residual stream after FFN | stream | post-attention residual + FFN update |
+| Layer norm - readout input | ln | final model norm read by the projection |
 | Readout probabilities | readout | top-K next tokens + entropy |
+
+The implemented equations are:
+
+```text
+r0 = token_embedding + position_embedding
+a_i = r_i + Attention_i(LN_attention_i(r_i))
+r_(i+1) = a_i + FFN_i(LN_ffn_i(a_i)), for i = 0, 1, 2
+probabilities = softmax(OutputProjection(LN_final(r3)))
+```
 
 Exactly one node's view is rendered at a time. Selecting a chip from the node
 strip (or the expanded diagram), or stepping with ◀ Previous / Next ▶ or the
@@ -184,8 +197,8 @@ heatmaps**: each token gets its
 own square tile in a single heatmap with a clear gap between tiles, and the
 selected token's tile is outlined in red. The plot always fits the panel
 width; scroll the mouse wheel or use the mode bar to zoom in when you want a
-closer look. A token's width-256 vector is laid out row-major as a 16×16 grid
-(other widths use the factor pair closest to a square). Select a token from the
+closer look. The notebook's width-1024 vectors are laid out row-major as 32×32
+grids (other widths use the factor pair closest to a square). Select a token from the
 chips, the position dropdown, or by clicking any cell of its tile. Changing any
 selection re-renders from captured data only and never runs the model again.
 
@@ -201,11 +214,11 @@ whole prompt. It is derived from the captured probabilities, whose ordering
 matches the pre-softmax logits.
 
 For a logit-lens probe, select a residual-stream node and enable **De-embed at
-this token**. The selected residual vector is multiplied by the same final
-output matrix used to produce logits, then softmaxed to show the next-token
-distribution that this intermediate state implies. The five residual states
-from the embedding input through the block output support this probe;
-`output_norm` should match the normal Readout. With an ablation active, the
+this token**. A selected raw residual vector first passes through the model's
+final output norm, then through the same output matrix and softmax used for
+normal inference. The seven raw residual states and `output_norm` support this
+probe; `output_norm` should match the normal Readout. With an ablation active,
+the
 ablated view keeps the selected residual node open, shows its projected top
 tokens, and compares baseline and ablated probabilities. If the selected state
 or its projected distribution did not change measurably, the view says so
@@ -226,9 +239,10 @@ deduplicated, and a new ablation replaces the previous ablated capture.
 The baseline capture remains available while the ablated capture is stored in
 memory for comparison.
 
-The initial ablatable nodes are `ffn_hidden`, `embedding`,
-`attention_residual`, `attention_norm`, `ffn_residual`, and `output_norm`.
-`ffn_hidden` dimensions use the configured feed-forward width; the other
+The initial ablatable nodes are `embedding`, `output_norm`, and each block's
+`attention_input_norm`, `attention_residual`, `ffn_input_norm`, `ffn_hidden`,
+and `ffn_residual`, identified by keys such as `blocks.0.ffn_hidden` through
+`blocks.2.ffn_hidden`. FFN hidden dimensions use the configured feed-forward width; the other
 nodes use the configured model width. Zero ablation removes the selected
 values. Mean ablation replaces each selected value with that dimension's mean
 at the other prompt positions for a token-scoped test, or its full prompt mean
@@ -266,19 +280,12 @@ TensorFlow and Keras versions, model sizes, and text-processing settings. The
 loader refuses incomplete or inconsistent folders rather than loading uncertain
 data.
 
-If a trusted TensorFlow 2.20.0/Keras 3.13.2 format-1 checkpoint is encountered,
-the included one-time migration command can create a new format-2 folder without
-altering the original:
-
-```powershell
-python scripts/migrate_checkpoint.py `
-  "checkpoints\old-checkpoint" `
-  "checkpoints\old-checkpoint-v2"
-```
-
-Use the new `-v2` folder in the app. The command refuses checkpoints with an
-unknown runtime, architecture, vocabulary, or weight shape. Do not edit the
-metadata by hand.
+The supported architecture identifier is `three_block_pre_norm_causal_lm`, and
+new exports use checkpoint format 3. One-block and post-norm checkpoints are
+rejected even when their tensor shapes otherwise look valid. Neither adding two
+missing blocks nor moving layer norms has a safe deterministic weight
+conversion; retrain and export a new checkpoint instead of editing metadata or
+copying weights.
 
 ## Colab Training And Export
 
@@ -289,7 +296,7 @@ releasing a new compatible app. Clone the repository and import from that
 checkout instead of copying model classes into the notebook:
 
 ```python
-REPOSITORY_REVISION = "132461d"  # immutable app/chart implementation revision
+REPOSITORY_REVISION = "SET_TO_PRE_NORM_IMPLEMENTATION_COMMIT"
 !git clone https://github.com/khuongngoduc0310/Residual-Visualizer.git
 %cd Residual-Visualizer
 !git checkout {REPOSITORY_REVISION}
@@ -315,6 +322,10 @@ from preprocess import (
 )
 ```
 
+Replace the sentinel with the immutable commit containing this pre-norm
+implementation before running the notebook. The setup cell intentionally stops
+instead of falling back to an old or moving revision.
+
 Process punctuation before creating the dataset. Adapt the tokenizer before
 building the model so the output size uses the actual vocabulary length:
 
@@ -335,11 +346,13 @@ vocabulary = vectorizer.get_vocabulary()
 config = ModelConfig(
     vocab_size=len(vocabulary),
     max_len=MAX_LEN,
-    embedding_dim=256,
-    num_heads=2,
+    embedding_dim=1024,
+    num_heads=8,
     key_dim=128,
-    feed_forward_dim=256,
+    feed_forward_dim=1024,
     dropout_rate=0.1,
+    num_blocks=3,
+    feed_forward_activity_l1=1e-5,
 )
 language_model = build_model(config)
 compile_for_training(language_model)
@@ -358,8 +371,10 @@ language_model.fit(train_ds, epochs=10)
 ```
 
 Right-side padding is required. The causal attention mask prevents real tokens
-from looking forward at that padding, while the sample weights remove padding
-from the loss.
+from looking forward at that padding, while sample weights remove padding from
+cross-entropy. Each block's FFN hidden activity adds an L1 penalty of
+`1e-5 / batch_size * sum(abs(hidden))`; an explicit token mask excludes padded
+positions from that auxiliary loss.
 
 Export all checkpoint files through the shared helper:
 
@@ -378,7 +393,7 @@ checkpoint, preventing a failed export from mixing old and new files.
 The checkpoint must be exported with TensorFlow 2.20.0 and Keras 3.13.2. A
 checkpoint produced by another runtime is rejected because weight
 compatibility is not guaranteed. The format version is incremented when this
-runtime contract changes; older TensorFlow 2.10 checkpoints are rejected.
+runtime or architecture contract changes; pre-format-3 checkpoints are rejected.
 
 ## Troubleshooting
 

@@ -11,6 +11,7 @@ from tensorflow.keras import Model, layers
 
 from model import (
     ARCHITECTURE_NAME,
+    NUM_TRANSFORMER_BLOCKS,
     ModelConfig,
     TokenAndPositionEmbedding,
     TransformerBlock,
@@ -25,7 +26,7 @@ from preprocess import (
 )
 
 
-CHECKPOINT_FORMAT_VERSION = 2
+CHECKPOINT_FORMAT_VERSION = 3
 SUPPORTED_TENSORFLOW_VERSION = "2.20.0"
 SUPPORTED_KERAS_VERSION = "3.13.2"
 WEIGHTS_FILENAME = "model.weights.h5"
@@ -189,7 +190,11 @@ def _validate_model(model: Model, config: ModelConfig) -> None:
     expected_layer_names = [
         "token_ids",
         "token_and_position_embedding",
-        "transformer_block",
+        *[
+            f"transformer_block_{index}"
+            for index in range(NUM_TRANSFORMER_BLOCKS)
+        ],
+        "final_output_layer_norm",
         "token_probabilities",
     ]
     if model.name != ARCHITECTURE_NAME or [
@@ -198,63 +203,95 @@ def _validate_model(model: Model, config: ModelConfig) -> None:
         raise CheckpointError("The model architecture does not match config")
 
     embedding = model.get_layer("token_and_position_embedding")
-    transformer = model.get_layer("transformer_block")
+    transformers = [
+        model.get_layer(f"transformer_block_{index}")
+        for index in range(NUM_TRANSFORMER_BLOCKS)
+    ]
+    final_output_norm = model.get_layer("final_output_layer_norm")
     output = model.get_layer("token_probabilities")
     if not isinstance(embedding, TokenAndPositionEmbedding):
         raise CheckpointError("The model embedding does not match config")
-    if not isinstance(transformer, TransformerBlock):
-        raise CheckpointError("The transformer block does not match config")
+    if not all(isinstance(block, TransformerBlock) for block in transformers):
+        raise CheckpointError("The transformer blocks do not match config")
+    if not isinstance(final_output_norm, layers.LayerNormalization):
+        raise CheckpointError("The final output norm does not match config")
     if not isinstance(output, layers.Dense):
         raise CheckpointError("The model output does not match config")
     if tf.keras.activations.serialize(output.activation) != "softmax":
         raise CheckpointError("The model output activation must be softmax")
+    if not output.use_bias:
+        raise CheckpointError("The model output must use a bias")
+    if (
+        embedding.vocab_size != config.vocab_size
+        or embedding.token_emb.input_dim != config.vocab_size
+        or embedding.embed_dim != config.embedding_dim
+        or embedding.token_emb.output_dim != config.embedding_dim
+        or embedding.max_len != config.max_len
+        or embedding.pos_emb.input_dim != config.max_len
+        or embedding.pos_emb.output_dim != config.embedding_dim
+        or output.units != config.vocab_size
+    ):
+        raise CheckpointError("The embedding or output does not match config")
     if embedding.vocab_size != output.units:
         raise CheckpointError(
             "The embedding and output vocabulary sizes do not match"
         )
-    attention_config = transformer.attn.get_config()
-    attention_output_shape = attention_config["output_shape"]
-    if isinstance(attention_output_shape, (list, tuple)):
-        if len(attention_output_shape) != 1:
-            raise CheckpointError("The attention output shape does not match config")
-        attention_output_shape = attention_output_shape[0]
+    if config.num_blocks != len(transformers):
+        raise CheckpointError("The transformer block count does not match config")
+
+    norms = [final_output_norm]
+    for transformer in transformers:
+        attention_config = transformer.attn.get_config()
+        attention_output_shape = attention_config["output_shape"]
+        if isinstance(attention_output_shape, (list, tuple)):
+            if len(attention_output_shape) != 1:
+                raise CheckpointError(
+                    "The attention output shape does not match config"
+                )
+            attention_output_shape = attention_output_shape[0]
+        if (
+            transformer.num_heads != config.num_heads
+            or attention_config["num_heads"] != config.num_heads
+            or transformer.key_dim != config.key_dim
+            or attention_config["key_dim"] != config.key_dim
+            or transformer.embed_dim != config.embedding_dim
+            or attention_output_shape != config.embedding_dim
+            or transformer.ff_dim != config.feed_forward_dim
+            or transformer.ffn_1.units != config.feed_forward_dim
+            or transformer.ffn_2.units != config.embedding_dim
+            or not transformer.ffn_1.use_bias
+            or not transformer.ffn_2.use_bias
+            or tf.keras.activations.serialize(transformer.ffn_2.activation)
+            != "linear"
+            or not attention_config["use_bias"]
+            or attention_config["dropout"] != 0.0
+        ):
+            raise CheckpointError("The model layer sizes do not match config")
+        if (
+            transformer.dropout_rate != config.dropout_rate
+            or transformer.dropout_1.rate != config.dropout_rate
+            or transformer.dropout_2.rate != config.dropout_rate
+            or transformer.feed_forward_activation
+            != config.feed_forward_activation
+            or tf.keras.activations.serialize(transformer.ffn_1.activation)
+            != config.feed_forward_activation
+            or transformer.layer_norm_epsilon != config.layer_norm_epsilon
+            or transformer.feed_forward_activity_l1
+            != config.feed_forward_activity_l1
+        ):
+            raise CheckpointError("The transformer layers do not match config")
+        norms.extend(
+            (transformer.attention_input_norm, transformer.ffn_input_norm)
+        )
+
     if (
-        embedding.vocab_size != embedding.token_emb.input_dim
-        or embedding.embed_dim != embedding.token_emb.output_dim
-        or embedding.max_len != embedding.pos_emb.input_dim
-        or embedding.embed_dim != embedding.pos_emb.output_dim
-        or transformer.num_heads != attention_config["num_heads"]
-        or transformer.key_dim != attention_config["key_dim"]
-        or transformer.embed_dim != attention_output_shape
-        or transformer.ff_dim != transformer.ffn_1.units
-        or transformer.embed_dim != transformer.ffn_2.units
-    ):
-        raise CheckpointError("The model layer sizes do not match config")
-    if (
-        transformer.ln_1.epsilon != transformer.layer_norm_epsilon
-        or transformer.ln_2.epsilon != transformer.layer_norm_epsilon
-        or transformer.dropout_1.rate != transformer.dropout_rate
-        or transformer.dropout_2.rate != transformer.dropout_rate
-        or tf.keras.activations.serialize(transformer.ffn_1.activation)
-        != transformer.feed_forward_activation
+        any(
+            norm.axis != [-1] or not norm.center or not norm.scale
+            for norm in norms
+        )
+        or any(norm.epsilon != config.layer_norm_epsilon for norm in norms)
     ):
         raise CheckpointError("The transformer layers do not match config")
-
-    actual_config = ModelConfig(
-        vocab_size=output.units,
-        max_len=embedding.max_len,
-        embedding_dim=embedding.embed_dim,
-        num_heads=transformer.num_heads,
-        key_dim=transformer.key_dim,
-        feed_forward_dim=transformer.ff_dim,
-        dropout_rate=transformer.dropout_rate,
-        feed_forward_activation=transformer.feed_forward_activation,
-        layer_norm_epsilon=transformer.layer_norm_epsilon,
-    )
-    if actual_config != config:
-        raise CheckpointError(
-            "The model does not match the supplied model settings"
-        )
 
 
 def _reject_unexpected_files(directory: Path) -> None:

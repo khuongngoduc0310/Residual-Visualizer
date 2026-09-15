@@ -428,8 +428,7 @@ button {
 
 .ct-graph-svg {
   display: block;
-  width: 100%;
-  min-width: 1180px;
+  max-width: none;
   height: auto;
 }
 

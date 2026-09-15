@@ -29,10 +29,75 @@ const engine = vi.hoisted(() => ({
 
 vi.mock("./api/client", () => engine);
 
+const blockStages: Array<{
+  stage: string;
+  label: string;
+  kind: GraphNode["kind"];
+  family: GraphNode["family"];
+  featureAxis?: boolean;
+}> = [
+  {
+    stage: "attention_input_norm",
+    label: "Layer norm - attention input",
+    kind: "ln",
+    family: "norm",
+  },
+  {
+    stage: "attention_pattern",
+    label: "Causal attention pattern",
+    kind: "pattern",
+    family: "pattern",
+    featureAxis: false,
+  },
+  {
+    stage: "attention_update",
+    label: "Attention output → residual",
+    kind: "update",
+    family: "updates",
+  },
+  {
+    stage: "attention_residual",
+    label: "Residual stream · after attention",
+    kind: "stream",
+    family: "stream_raw",
+  },
+  {
+    stage: "ffn_input_norm",
+    label: "Layer norm - FFN input",
+    kind: "ln",
+    family: "norm",
+  },
+  {
+    stage: "ffn_hidden",
+    label: "FFN hidden (ReLU)",
+    kind: "hidden",
+    family: "hidden",
+  },
+  {
+    stage: "ffn_update",
+    label: "FFN output → residual",
+    kind: "update",
+    family: "updates",
+  },
+  {
+    stage: "ffn_residual",
+    label: "Residual stream · after FFN",
+    kind: "stream",
+    family: "stream_raw",
+  },
+];
+
+function blockKey(blockIndex: number, stage: string): string {
+  return `blocks.${blockIndex}.${stage}`;
+}
+
 const nodeKeys = [
+  "token_embeddings",
+  "position_embeddings",
   "embedding",
-  "attention_residual",
-  "ffn_residual",
+  ...Array.from({ length: 3 }, (_, blockIndex) =>
+    blockStages.map(({ stage }) => blockKey(blockIndex, stage)),
+  ).flat(),
   "output_norm",
   "readout",
 ];
@@ -44,15 +109,11 @@ function graphNode(
   family: GraphNode["family"],
   featureAxis = true,
 ): GraphNode {
-  const trace = [
-    "embedding",
-    "attention_update",
-    "attention_residual",
-    "ffn_residual",
-    "output_norm",
-    "readout",
-  ];
+  const trace = nodeKeys;
   const index = trace.indexOf(key);
+  const blockMatch = /^blocks\.(\d+)\.(.+)$/.exec(key);
+  const blockIndex = blockMatch ? Number(blockMatch[1]) : null;
+  const stage = blockMatch?.[2] ?? null;
   return {
     key,
     label,
@@ -61,48 +122,124 @@ function graphNode(
     explanation: `${label} explanation.`,
     normalized: kind === "ln",
     feature_axis: featureAxis,
-    deembeddable: [
-      "embedding",
-      "attention_residual",
-      "attention_norm",
-      "ffn_residual",
-      "output_norm",
-    ].includes(key),
+    deembeddable:
+      key === "embedding" ||
+      key === "output_norm" ||
+      stage === "attention_residual" ||
+      stage === "ffn_residual",
     trace_index: index,
     trace_count: trace.length,
     prev_key: index > 0 ? trace[index - 1] : null,
     next_key: index < trace.length - 1 ? trace[index + 1] : null,
+    block_index: blockIndex,
+    stage,
+    width_source:
+      stage === "ffn_hidden"
+        ? "ffn"
+        : kind === "pattern" || kind === "readout"
+          ? "none"
+          : "model",
   };
 }
 
 const optionsFixture: OptionsPayload = {
   graph: {
     nodes: [
-      graphNode("embedding", "Residual stream input", "stream", "stream_raw"),
-      graphNode("attention_update", "Attention output → residual", "update", "updates"),
-      graphNode("attention_residual", "Residual stream after attention", "stream", "stream_raw"),
-      graphNode("ffn_residual", "Residual stream after FFN", "stream", "stream_raw"),
-      graphNode("output_norm", "Layer norm block output", "ln", "stream_norm"),
-      graphNode("readout", "Readout probabilities", "readout", "readout", false),
+      graphNode("token_embeddings", "Token embeddings", "component", "components"),
+      graphNode(
+        "position_embeddings",
+        "Position embeddings",
+        "component",
+        "components",
+      ),
+      graphNode("embedding", "Residual stream · input", "stream", "stream_raw"),
+      ...Array.from({ length: 3 }, (_, blockIndex) =>
+        blockStages.map(({ stage, label, kind, family, featureAxis }) =>
+          graphNode(
+            blockKey(blockIndex, stage),
+            `Block ${blockIndex + 1} - ${label}`,
+            kind,
+            family,
+            featureAxis,
+          ),
+        ),
+      ).flat(),
+      graphNode("output_norm", "Layer norm - readout input", "ln", "norm"),
+      graphNode(
+        "readout",
+        "Readout · next-token probabilities",
+        "readout",
+        "readout",
+        false,
+      ),
     ],
-    spine: ["embedding", "attention_residual", "ffn_residual", "output_norm"],
-    spine_links: ["attention-add", "ffn-add", "layer-norm", "readout"],
-    branches: [],
-    components: [],
+    spine: [
+      "embedding",
+      ...Array.from({ length: 3 }, (_, blockIndex) => [
+        blockKey(blockIndex, "attention_residual"),
+        blockKey(blockIndex, "ffn_residual"),
+      ]).flat(),
+      "output_norm",
+    ],
+    spine_links: [
+      "attention-add",
+      "ffn-add",
+      "attention-add",
+      "ffn-add",
+      "attention-add",
+      "ffn-add",
+      "layer-norm",
+      "readout",
+    ],
+    branches: Array.from({ length: 3 }, (_, blockIndex) => [
+      {
+        key: `block_${blockIndex}_attention`,
+        label: `Block ${blockIndex + 1} causal multi-head attention`,
+        reads:
+          blockIndex === 0
+            ? "embedding"
+            : blockKey(blockIndex - 1, "ffn_residual"),
+        adds_before: blockKey(blockIndex, "attention_residual"),
+        path: [
+          blockKey(blockIndex, "attention_input_norm"),
+          blockKey(blockIndex, "attention_update"),
+        ],
+        observables: [blockKey(blockIndex, "attention_pattern")],
+        kind: "attention" as const,
+        block_index: blockIndex,
+        side: "above" as const,
+      },
+      {
+        key: `block_${blockIndex}_ffn`,
+        label: `Block ${blockIndex + 1} feed-forward network`,
+        reads: blockKey(blockIndex, "attention_residual"),
+        adds_before: blockKey(blockIndex, "ffn_residual"),
+        path: [
+          blockKey(blockIndex, "ffn_input_norm"),
+          blockKey(blockIndex, "ffn_hidden"),
+          blockKey(blockIndex, "ffn_update"),
+        ],
+        observables: [],
+        kind: "ffn" as const,
+        block_index: blockIndex,
+        side: "below" as const,
+      },
+    ]).flat(),
+    components: ["token_embeddings", "position_embeddings"],
     trace: nodeKeys,
     default_node: "output_norm",
   },
   locations: [],
   ablation_nodes: [
     {
-      key: "ffn_hidden",
-      label: "FFN hidden (ReLU)",
+      key: "blocks.0.ffn_hidden",
+      label: "Block 1 - FFN hidden (ReLU)",
       kind: "hidden",
       family: "hidden",
     },
     {
-      key: "ffn_residual",
-      label: "Residual stream after FFN",
+      key: "blocks.2.ffn_residual",
+      label: "Block 3 - Residual stream · after FFN",
       kind: "stream",
       family: "stream_raw",
     },
@@ -114,18 +251,20 @@ const loadFixture: LoadPayload = {
   status: "Model loaded successfully.",
   loaded: true,
   meta: {
-    architecture: "one_block_post_norm_causal_lm",
+    architecture: "three_block_pre_norm_causal_lm",
     path: "C:\\ckpt",
     vocab_size: 6,
     max_len: 6,
     embedding_dim: 8,
     num_heads: 2,
     key_dim: 4,
-    feed_forward_dim: 8,
+    feed_forward_dim: 12,
     dropout_rate: 0,
+    num_blocks: 3,
+    feed_forward_activity_l1: 0.00001,
   },
   device_label: "CPU",
-  summary: "one_block_post_norm_causal_lm\n",
+  summary: "three_block_pre_norm_causal_lm\n",
 };
 
 const analyzeFixture: AnalyzePayload = {
@@ -156,6 +295,8 @@ function inspectFixture(
 ): InspectPayload {
   const nodeKey = key ?? "output_norm";
   const node = nodeInfo(nodeKey);
+  const ablationIsThirdBlockResidual =
+    nodeKey === "blocks.2.ffn_residual";
   return {
     ok: true,
     state: "ready",
@@ -165,11 +306,13 @@ function inspectFixture(
       view === "baseline"
         ? null
         : {
-            node_key: nodeKey === "ffn_residual" ? "ffn_residual" : "ffn_hidden",
+            node_key: ablationIsThirdBlockResidual
+              ? "blocks.2.ffn_residual"
+              : "blocks.0.ffn_hidden",
             node_label:
-              nodeKey === "ffn_residual"
-                ? "Residual stream after FFN"
-                : "FFN hidden (ReLU)",
+              ablationIsThirdBlockResidual
+                ? "Block 3 - Residual stream · after FFN"
+                : "Block 1 - FFN hidden (ReLU)",
             dims: [0, 2],
             mode: "zero",
             scope: "token",
@@ -243,10 +386,10 @@ beforeEach(() => {
   engine.analyzePrompt.mockResolvedValue(analyzeFixture);
   engine.ablateFeature.mockResolvedValue({
     ok: true,
-    status: "Ablated ffn_hidden dimensions 0, 2.",
+    status: "Ablated blocks.0.ffn_hidden dimensions 0, 2.",
     ablation: {
-      node_key: "ffn_hidden",
-      node_label: "FFN hidden (ReLU)",
+      node_key: "blocks.0.ffn_hidden",
+      node_label: "Block 1 - FFN hidden (ReLU)",
       dims: [0, 2],
       mode: "zero",
       scope: "token",
@@ -277,9 +420,23 @@ describe("App", () => {
       screen.getByRole("button", { name: "Show model diagram" }),
     );
     expect(await screen.findByTestId("residual-graph")).toBeInTheDocument();
-    expect(screen.getByTestId("residual-graph")).toHaveTextContent(
-      "Residual stream input",
+    const graph = screen.getByTestId("residual-graph");
+    expect(Number(graph.getAttribute("width"))).toBeGreaterThan(1580);
+    expect(graph.parentElement).toHaveClass("ct-graph-scroll");
+    expect(graph).toHaveTextContent(
+      "Residual stream · input",
     );
+    expect(graph).toHaveTextContent(
+      "Block 1 - Layer norm - attention input",
+    );
+    expect(graph).toHaveTextContent(
+      "Causal attention pattern",
+    );
+    expect(graph).toHaveTextContent(
+      "Block 3 - Layer norm - FFN input",
+    );
+    expect(graph.querySelectorAll("[data-branch]")).toHaveLength(6);
+    expect(optionsFixture.graph.branches).toHaveLength(6);
   });
 
   it("loads a checkpoint and shows its runtime details", async () => {
@@ -298,9 +455,14 @@ describe("App", () => {
     expect(await screen.findByTestId("load-status")).toHaveTextContent(
       "Model loaded successfully.",
     );
-    expect(screen.getByTestId("model-meta")).toHaveTextContent("CPU");
+    expect(screen.getByTestId("model-meta")).toHaveTextContent(
+      /Transformer blocks\s*3/,
+    );
+    expect(screen.getByTestId("model-meta")).toHaveTextContent(
+      /FFN activity L1\s*0.00001/,
+    );
     expect(await screen.findByTestId("model-summary")).toHaveTextContent(
-      "one_block_post_norm_causal_lm",
+      "three_block_pre_norm_causal_lm",
     );
   });
 
@@ -317,12 +479,12 @@ describe("App", () => {
     expect(await screen.findByText(/world/)).toBeInTheDocument();
     await waitFor(() => expect(engine.inspectNode).toHaveBeenCalled());
     expect(await screen.findByTestId("node-label")).toHaveTextContent(
-      "Layer norm block output",
+      "Layer norm - readout input",
     );
     expect(screen.getByTestId("node-primary-plot")).toBeInTheDocument();
   });
 
-  it("clicks a graph chip to inspect that node", async () => {
+  it("renders and selects graph nodes from blocks 1 and 3", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -330,7 +492,7 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
     await waitFor(() =>
       expect(screen.getByTestId("node-label")).toHaveTextContent(
-        "Layer norm block output",
+        "Layer norm - readout input",
       ),
     );
     await user.click(
@@ -338,18 +500,35 @@ describe("App", () => {
     );
 
     const graph = await screen.findByTestId("residual-graph");
-    const chip = graph.querySelector('[data-node="attention_residual"]');
-    expect(chip).not.toBeNull();
-    await user.click(chip as Element);
+    const block1Chip = graph.querySelector(
+      '[data-node="blocks.0.attention_residual"]',
+    );
+    const block3Chip = graph.querySelector(
+      '[data-node="blocks.2.ffn_hidden"]',
+    );
+    expect(block1Chip).not.toBeNull();
+    expect(block3Chip).not.toBeNull();
+    await user.click(block1Chip as Element);
 
     await waitFor(() =>
       expect(engine.inspectNode).toHaveBeenLastCalledWith(
-        "attention_residual",
+        "blocks.0.attention_residual",
         expect.anything(),
       ),
     );
     expect(await screen.findByTestId("node-label")).toHaveTextContent(
-      "Residual stream after attention",
+      "Block 1 - Residual stream · after attention",
+    );
+
+    await user.click(block3Chip as Element);
+    await waitFor(() =>
+      expect(engine.inspectNode).toHaveBeenLastCalledWith(
+        "blocks.2.ffn_hidden",
+        expect.anything(),
+      ),
+    );
+    expect(await screen.findByTestId("node-label")).toHaveTextContent(
+      "Block 3 - FFN hidden (ReLU)",
     );
   });
 
@@ -361,24 +540,26 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
     await waitFor(() =>
       expect(screen.getByTestId("node-label")).toHaveTextContent(
-        "Layer norm block output",
+        "Layer norm - readout input",
       ),
     );
 
     const strip = screen.getByTestId("node-strip");
     expect(strip).toBeInTheDocument();
-    const chip = strip.querySelector('[data-node="attention_residual"]');
+    const chip = strip.querySelector(
+      '[data-node="blocks.1.attention_residual"]',
+    );
     expect(chip).not.toBeNull();
     await user.click(chip as Element);
 
     await waitFor(() =>
       expect(engine.inspectNode).toHaveBeenLastCalledWith(
-        "attention_residual",
+        "blocks.1.attention_residual",
         expect.anything(),
       ),
     );
     expect(await screen.findByTestId("node-label")).toHaveTextContent(
-      "Residual stream after attention",
+      "Block 2 - Residual stream · after attention",
     );
   });
 
@@ -390,7 +571,7 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
     await waitFor(() =>
       expect(screen.getByTestId("node-label")).toHaveTextContent(
-        "Layer norm block output",
+        "Layer norm - readout input",
       ),
     );
 
@@ -405,7 +586,7 @@ describe("App", () => {
       ),
     );
     expect(await screen.findByTestId("node-label")).toHaveTextContent(
-      "Readout probabilities",
+      "Readout · next-token probabilities",
     );
   });
 
@@ -417,7 +598,7 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
     await waitFor(() =>
       expect(screen.getByTestId("node-label")).toHaveTextContent(
-        "Layer norm block output",
+        "Layer norm - readout input",
       ),
     );
 
@@ -436,13 +617,15 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
 
+    await user.type(screen.getByLabelText(/Server path/), "C:\\ckpt");
     await user.click(screen.getByRole("button", { name: "Load model" }));
     await waitFor(() => expect(screen.getByTestId("load-status")).toHaveTextContent("Model loaded"));
+    expect(screen.getByText("valid range: 0–11")).toBeInTheDocument();
     await user.type(screen.getByLabelText(/Prompt/), "hello ,");
     await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
     await waitFor(() =>
       expect(screen.getByTestId("node-label")).toHaveTextContent(
-        "Layer norm block output",
+        "Layer norm - readout input",
       ),
     );
 
@@ -453,7 +636,7 @@ describe("App", () => {
 
     await waitFor(() =>
       expect(engine.ablateFeature).toHaveBeenCalledWith(
-        "ffn_hidden",
+        "blocks.0.ffn_hidden",
         [0, 2],
         "zero",
         "token",
@@ -474,6 +657,7 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
 
+    await user.type(screen.getByLabelText(/Server path/), "C:\\ckpt");
     await user.click(screen.getByRole("button", { name: "Load model" }));
     await user.type(screen.getByLabelText(/Prompt/), "hello ,");
     await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
@@ -498,20 +682,21 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
 
+    await user.type(screen.getByLabelText(/Server path/), "C:\\ckpt");
     await user.click(screen.getByRole("button", { name: "Load model" }));
     await user.type(screen.getByLabelText(/Prompt/), "hello ,");
     await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
 
-    const ffnResidualChip = (await screen.findByTestId("node-strip")).querySelector(
-      '[data-node="ffn_residual"]',
-    );
+    const ffnResidualChip = (
+      await screen.findByTestId("node-strip")
+    ).querySelector('[data-node="blocks.2.ffn_residual"]');
     expect(ffnResidualChip).not.toBeNull();
     await user.click(ffnResidualChip as Element);
     await waitFor(() => screen.getByTestId("deembed-toggle"));
     await user.click(screen.getByTestId("deembed-toggle"));
     await waitFor(() =>
       expect(engine.inspectNode).toHaveBeenLastCalledWith(
-        "ffn_residual",
+        "blocks.2.ffn_residual",
         1,
         "baseline",
         null,
@@ -521,13 +706,13 @@ describe("App", () => {
 
     await user.selectOptions(
       screen.getByLabelText("Activation node"),
-      "ffn_residual",
+      "blocks.2.ffn_residual",
     );
     await user.click(screen.getByTestId("ablate-button"));
 
     await waitFor(() =>
       expect(engine.ablateFeature).toHaveBeenCalledWith(
-        "ffn_residual",
+        "blocks.2.ffn_residual",
         [0],
         "zero",
         "token",
@@ -535,14 +720,14 @@ describe("App", () => {
       ),
     );
     expect(engine.inspectNode).toHaveBeenLastCalledWith(
-      "ffn_residual",
+      "blocks.2.ffn_residual",
       1,
       "ablated",
       null,
       true,
     );
     expect(screen.getByTestId("node-label")).toHaveTextContent(
-      "Residual stream after FFN",
+      "Block 3 - Residual stream · after FFN",
     );
     expect(await screen.findByTestId("deembed-table")).toHaveTextContent(
       "world",
@@ -559,6 +744,7 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
 
+    await user.type(screen.getByLabelText(/Server path/), "C:\\ckpt");
     await user.click(screen.getByRole("button", { name: "Load model" }));
     await user.type(screen.getByLabelText(/Prompt/), "hello ,");
     await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
@@ -591,7 +777,7 @@ describe("App", () => {
 describe("NodeView", () => {
   it("explains an unchanged ablated de-embed result without hiding predictions", () => {
     const inspect = {
-      ...inspectFixture("ffn_residual", "ablated", true),
+      ...inspectFixture("blocks.2.ffn_residual", "ablated", true),
       deembed_figure: null,
       deembed_movers: [],
       deembed_has_effect: false,
@@ -618,7 +804,7 @@ describe("NodeView", () => {
 
   it("distinguishes a changed residual with no projected probability effect", () => {
     const inspect = {
-      ...inspectFixture("ffn_residual", "ablated", true),
+      ...inspectFixture("blocks.2.ffn_residual", "ablated", true),
       deembed_figure: null,
       deembed_has_effect: false,
       deembed_state_changed: true,
