@@ -18,7 +18,6 @@ from preprocess import (
     pad_punctuation,
 )
 
-
 NEXT_TOKEN_COUNT = 5
 
 
@@ -93,7 +92,7 @@ def _analysis_from_ids(
             probability=float(probability),
         )
         for rank, (probability, token_id) in enumerate(
-            zip(sorted_probabilities, top_indices),
+            zip(sorted_probabilities, top_indices, strict=False),
             start=1,
         )
     )

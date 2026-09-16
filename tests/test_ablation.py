@@ -1,51 +1,27 @@
 import numpy as np
 import pytest
 import tensorflow as tf
+from support import block0, write_checkpoint
 
-from checkpoint import load_checkpoint, save_checkpoint
+from checkpoint import load_checkpoint
 from inspection import (
     AblationError,
     AblationSpec,
-    capture_locations,
     block_node_key,
+    capture_locations,
     node_spec,
 )
-from model import ModelConfig, build_model
-
-
-VOCABULARY = ["", "[UNK]", "hello", ",", "world", "!"]
-
-
-def tiny_config(**changes):
-    values = {
-        "vocab_size": len(VOCABULARY),
-        "max_len": 6,
-        "embedding_dim": 8,
-        "num_heads": 2,
-        "key_dim": 4,
-        "feed_forward_dim": 8,
-        "dropout_rate": 0.0,
-    }
-    values.update(changes)
-    return ModelConfig(**values)
 
 
 @pytest.fixture(scope="module")
 def loaded_checkpoint(tmp_path_factory):
     directory = tmp_path_factory.mktemp("ablation-checkpoint")
-    tf.keras.utils.set_random_seed(23)
-    config = tiny_config()
-    model = build_model(config)
-    save_checkpoint(directory, model, VOCABULARY, config)
+    write_checkpoint(directory, seed=23)
     return load_checkpoint(directory)
 
 
 def token_ids():
     return tf.constant([2, 3, 4], dtype=tf.int32)
-
-
-def block0(stage):
-    return block_node_key(0, stage)
 
 
 def test_zero_ablation_replaces_selected_output_dimensions(loaded_checkpoint):
@@ -148,8 +124,7 @@ def test_pre_norm_branch_input_ablation_propagates_only_downstream(
     )
     np.testing.assert_allclose(
         ablated.locations[block0("attention_residual")],
-        ablated.locations["embedding"]
-        + ablated.locations[block0("attention_update")],
+        ablated.locations["embedding"] + ablated.locations[block0("attention_update")],
         atol=1e-6,
     )
     np.testing.assert_allclose(

@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { App, DEFAULT_CHECKPOINT } from "./App";
+import { App } from "./App";
 import { NodeView } from "./components/NodeView";
+import { DEFAULT_CHECKPOINT } from "./constants";
 import type {
   AnalyzePayload,
   GraphNode,
@@ -144,8 +145,7 @@ function graphNode(
       key === "output_norm" ||
       stage === "attention_residual" ||
       stage === "ffn_residual",
-    vocab_contributable:
-      stage === "attention_update" || stage === "ffn_update",
+    vocab_contributable: stage === "attention_update" || stage === "ffn_update",
     trace_index: index,
     trace_count: trace.length,
     prev_key: index > 0 ? trace[index - 1] : null,
@@ -215,9 +215,7 @@ const optionsFixture: OptionsPayload = {
         key: `block_${blockIndex}_attention`,
         label: `Block ${blockIndex + 1} causal multi-head attention`,
         reads:
-          blockIndex === 0
-            ? "embedding"
-            : blockKey(blockIndex - 1, "ffn_residual"),
+          blockIndex === 0 ? "embedding" : blockKey(blockIndex - 1, "ffn_residual"),
         adds_before: blockKey(blockIndex, "attention_residual"),
         path: [
           blockKey(blockIndex, "attention_input_norm"),
@@ -296,9 +294,7 @@ const analyzeFixture: AnalyzePayload = {
     { position: 0, text: "hello", token_id: 2 },
     { position: 1, text: ",", token_id: 3 },
   ],
-  next_tokens: [
-    { rank: 1, text: "world", token_id: 4, probability: 0.25 },
-  ],
+  next_tokens: [{ rank: 1, text: "world", token_id: 4, probability: 0.25 }],
 };
 
 function nodeInfo(key: string): GraphNode {
@@ -315,8 +311,7 @@ function inspectFixture(
 ): InspectPayload {
   const nodeKey = key ?? "output_norm";
   const node = nodeInfo(nodeKey);
-  const ablationIsThirdBlockResidual =
-    nodeKey === "blocks.2.ffn_residual";
+  const ablationIsThirdBlockResidual = nodeKey === "blocks.2.ffn_residual";
   return {
     ok: true,
     state: "ready",
@@ -329,10 +324,9 @@ function inspectFixture(
             node_key: ablationIsThirdBlockResidual
               ? "blocks.2.ffn_residual"
               : "blocks.0.ffn_hidden",
-            node_label:
-              ablationIsThirdBlockResidual
-                ? "Block 3 - Residual stream · after FFN"
-                : "Block 1 - FFN hidden (ReLU)",
+            node_label: ablationIsThirdBlockResidual
+              ? "Block 3 - Residual stream · after FFN"
+              : "Block 1 - FFN hidden (ReLU)",
             dims: [0, 2],
             mode: "zero",
             scope: "token",
@@ -429,9 +423,7 @@ function inspectFixture(
             },
           ]
         : [],
-    vocab_contribution_figure: vocabContributions
-      ? { data: [{}], layout: {} }
-      : null,
+    vocab_contribution_figure: vocabContributions ? { data: [{}], layout: {} } : null,
     vocab_contribution_has_effect:
       vocabContributions && view === "ablated" ? true : null,
   };
@@ -476,27 +468,17 @@ describe("App", () => {
     render(<App />);
 
     await waitFor(() => expect(engine.getOptions).toHaveBeenCalledTimes(1));
-    await user.click(
-      screen.getByRole("button", { name: "Show model diagram" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Show model diagram" }));
     expect(await screen.findByTestId("residual-graph")).toBeInTheDocument();
     const graph = screen.getByTestId("residual-graph");
     expect(Number(graph.getAttribute("width"))).toBeGreaterThan(1580);
     expect(Number(graph.getAttribute("width"))).toBeLessThan(2000);
     expect(graph.parentElement).toHaveClass("ct-graph-scroll");
     expect(graph.parentElement?.parentElement).toHaveClass("ct-graph-frame");
-    expect(graph).toHaveTextContent(
-      "Residual stream · input",
-    );
-    expect(graph).toHaveTextContent(
-      "Block 1 - Layer norm - attention input",
-    );
-    expect(graph).toHaveTextContent(
-      "Causal attention pattern",
-    );
-    expect(graph).toHaveTextContent(
-      "Block 3 - Layer norm - FFN input",
-    );
+    expect(graph).toHaveTextContent("Residual stream · input");
+    expect(graph).toHaveTextContent("Block 1 - Layer norm - attention input");
+    expect(graph).toHaveTextContent("Causal attention pattern");
+    expect(graph).toHaveTextContent("Block 3 - Layer norm - FFN input");
     expect(graph.querySelectorAll("[data-branch]")).toHaveLength(6);
     expect(optionsFixture.graph.branches).toHaveLength(6);
     expect(graph).toHaveTextContent("BLOCK 1 · ATTENTION");
@@ -521,9 +503,7 @@ describe("App", () => {
     render(<App />);
 
     await waitFor(() => expect(engine.getOptions).toHaveBeenCalledTimes(1));
-    await user.click(
-      screen.getByRole("button", { name: "Show model diagram" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Show model diagram" }));
 
     await waitFor(() => expect(scrollToMock).toHaveBeenCalled());
     expect(scrollToMock.mock.lastCall?.[0]).toMatchObject({ behavior: "auto" });
@@ -539,9 +519,7 @@ describe("App", () => {
     await user.type(pathInput, "C:\\ckpt");
     await user.click(screen.getByRole("button", { name: "Load model" }));
 
-    await waitFor(() =>
-      expect(engine.loadCheckpoint).toHaveBeenCalledWith("C:\\ckpt"),
-    );
+    await waitFor(() => expect(engine.loadCheckpoint).toHaveBeenCalledWith("C:\\ckpt"));
     expect(await screen.findByTestId("load-status")).toHaveTextContent(
       "Model loaded successfully.",
     );
@@ -563,9 +541,7 @@ describe("App", () => {
     await user.type(screen.getByLabelText(/Prompt/), "hello ,");
     await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
 
-    await waitFor(() =>
-      expect(engine.analyzePrompt).toHaveBeenCalledWith("hello ,"),
-    );
+    await waitFor(() => expect(engine.analyzePrompt).toHaveBeenCalledWith("hello ,"));
     expect(await screen.findByText(/world/)).toBeInTheDocument();
     await waitFor(() => expect(engine.inspectNode).toHaveBeenCalled());
     expect(await screen.findByTestId("node-label")).toHaveTextContent(
@@ -585,17 +561,11 @@ describe("App", () => {
         "Layer norm - readout input",
       ),
     );
-    await user.click(
-      screen.getByRole("button", { name: "Show model diagram" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Show model diagram" }));
 
     const graph = await screen.findByTestId("residual-graph");
-    const block1Chip = graph.querySelector(
-      '[data-node="blocks.0.attention_residual"]',
-    );
-    const block3Chip = graph.querySelector(
-      '[data-node="blocks.2.ffn_hidden"]',
-    );
+    const block1Chip = graph.querySelector('[data-node="blocks.0.attention_residual"]');
+    const block3Chip = graph.querySelector('[data-node="blocks.2.ffn_hidden"]');
     expect(block1Chip).not.toBeNull();
     expect(block3Chip).not.toBeNull();
     await user.click(block1Chip as Element);
@@ -609,9 +579,7 @@ describe("App", () => {
     expect(await screen.findByTestId("node-label")).toHaveTextContent(
       "Block 1 - Residual stream · after attention",
     );
-    await waitFor(() =>
-      expect(scrollToMock.mock.lastCall?.[0].left).toBeCloseTo(185),
-    );
+    await waitFor(() => expect(scrollToMock.mock.lastCall?.[0].left).toBeCloseTo(185));
 
     await user.click(block3Chip as Element);
     await waitFor(() =>
@@ -642,9 +610,7 @@ describe("App", () => {
 
     const strip = screen.getByTestId("node-strip");
     expect(strip).toBeInTheDocument();
-    const chip = strip.querySelector(
-      '[data-node="blocks.1.attention_residual"]',
-    );
+    const chip = strip.querySelector('[data-node="blocks.1.attention_residual"]');
     expect(chip).not.toBeNull();
     await user.click(chip as Element);
 
@@ -671,15 +637,10 @@ describe("App", () => {
       ),
     );
 
-    await user.click(
-      screen.getByRole("button", { name: /next node in the stream/i }),
-    );
+    await user.click(screen.getByRole("button", { name: /next node in the stream/i }));
 
     await waitFor(() =>
-      expect(engine.inspectNode).toHaveBeenLastCalledWith(
-        "readout",
-        expect.anything(),
-      ),
+      expect(engine.inspectNode).toHaveBeenLastCalledWith("readout", expect.anything()),
     );
     expect(await screen.findByTestId("node-label")).toHaveTextContent(
       "Readout · next-token probabilities",
@@ -702,10 +663,7 @@ describe("App", () => {
     await user.selectOptions(tokenSelect, "0");
 
     await waitFor(() =>
-      expect(engine.inspectNode).toHaveBeenLastCalledWith(
-        "output_norm",
-        0,
-      ),
+      expect(engine.inspectNode).toHaveBeenLastCalledWith("output_norm", 0),
     );
   });
 
@@ -715,7 +673,9 @@ describe("App", () => {
 
     await user.type(screen.getByLabelText(/Server path/), "C:\\ckpt");
     await user.click(screen.getByRole("button", { name: "Load model" }));
-    await waitFor(() => expect(screen.getByTestId("load-status")).toHaveTextContent("Model loaded"));
+    await waitFor(() =>
+      expect(screen.getByTestId("load-status")).toHaveTextContent("Model loaded"),
+    );
     expect(screen.getByText("valid range: 0–11")).toBeInTheDocument();
     await user.type(screen.getByLabelText(/Prompt/), "hello ,");
     await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
@@ -783,9 +743,9 @@ describe("App", () => {
     await user.type(screen.getByLabelText(/Prompt/), "hello ,");
     await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
 
-    const updateChip = (
-      await screen.findByTestId("node-strip")
-    ).querySelector('[data-node="blocks.0.attention_update"]');
+    const updateChip = (await screen.findByTestId("node-strip")).querySelector(
+      '[data-node="blocks.0.attention_update"]',
+    );
     expect(updateChip).not.toBeNull();
     await user.click(updateChip as Element);
 
@@ -803,15 +763,15 @@ describe("App", () => {
         true,
       ),
     );
-    expect(
-      await screen.findByTestId("vocab-contribution-results"),
-    ).toHaveTextContent("not probabilities");
-    expect(
-      screen.getByTestId("vocab-contribution-promoted-table"),
-    ).toHaveTextContent("+1.200000");
-    expect(
-      screen.getByTestId("vocab-contribution-suppressed-table"),
-    ).toHaveTextContent("-0.700000");
+    expect(await screen.findByTestId("vocab-contribution-results")).toHaveTextContent(
+      "not probabilities",
+    );
+    expect(screen.getByTestId("vocab-contribution-promoted-table")).toHaveTextContent(
+      "+1.200000",
+    );
+    expect(screen.getByTestId("vocab-contribution-suppressed-table")).toHaveTextContent(
+      "-0.700000",
+    );
 
     await user.click(screen.getByTestId("ablate-button"));
     await waitFor(() =>
@@ -824,9 +784,9 @@ describe("App", () => {
         true,
       ),
     );
-    expect(
-      screen.getByTestId("vocab-contribution-comparison-table"),
-    ).toHaveTextContent("-0.400000");
+    expect(screen.getByTestId("vocab-contribution-comparison-table")).toHaveTextContent(
+      "-0.400000",
+    );
 
     await user.click(screen.getByRole("button", { name: "Difference" }));
     await waitFor(() =>
@@ -841,9 +801,9 @@ describe("App", () => {
 
     await user.type(screen.getByLabelText(/Prompt/), "hello ,");
     await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
-    const updateChip = (
-      await screen.findByTestId("node-strip")
-    ).querySelector('[data-node="blocks.0.ffn_update"]');
+    const updateChip = (await screen.findByTestId("node-strip")).querySelector(
+      '[data-node="blocks.0.ffn_update"]',
+    );
     await user.click(updateChip as Element);
     await waitFor(() => screen.getByTestId("vocab-contribution-toggle"));
     engine.inspectNode.mockResolvedValueOnce({
@@ -855,16 +815,11 @@ describe("App", () => {
 
     await user.click(screen.getByTestId("vocab-contribution-toggle"));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Contribution failed.",
-    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("Contribution failed.");
     expect(screen.getByTestId("vocab-contribution-toggle")).not.toBeChecked();
     await user.selectOptions(screen.getByTestId("token-select"), "0");
     await waitFor(() =>
-      expect(engine.inspectNode).toHaveBeenLastCalledWith(
-        "blocks.0.ffn_update",
-        0,
-      ),
+      expect(engine.inspectNode).toHaveBeenLastCalledWith("blocks.0.ffn_update", 0),
     );
   });
 
@@ -874,9 +829,9 @@ describe("App", () => {
 
     await user.type(screen.getByLabelText(/Prompt/), "hello ,");
     await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
-    const updateChip = (
-      await screen.findByTestId("node-strip")
-    ).querySelector('[data-node="blocks.0.attention_update"]');
+    const updateChip = (await screen.findByTestId("node-strip")).querySelector(
+      '[data-node="blocks.0.attention_update"]',
+    );
     await user.click(updateChip as Element);
     await user.click(await screen.findByTestId("vocab-contribution-toggle"));
     await waitFor(() => screen.getByTestId("vocab-contribution-results"));
@@ -912,9 +867,7 @@ describe("App", () => {
     await user.type(screen.getByLabelText(/Prompt/), "hello ,");
     await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
     const strip = await screen.findByTestId("node-strip");
-    const firstUpdate = strip.querySelector(
-      '[data-node="blocks.0.attention_update"]',
-    );
+    const firstUpdate = strip.querySelector('[data-node="blocks.0.attention_update"]');
     const lastUpdate = strip.querySelector('[data-node="blocks.2.ffn_update"]');
     let resolveSlow: (value: InspectPayload) => void = () => undefined;
     const slowResponse = new Promise<InspectPayload>((resolve) => {
@@ -999,9 +952,9 @@ describe("App", () => {
     await user.type(screen.getByLabelText(/Prompt/), "hello ,");
     await user.click(screen.getByRole("button", { name: "Analyze prompt" }));
 
-    const ffnResidualChip = (
-      await screen.findByTestId("node-strip")
-    ).querySelector('[data-node="blocks.2.ffn_residual"]');
+    const ffnResidualChip = (await screen.findByTestId("node-strip")).querySelector(
+      '[data-node="blocks.2.ffn_residual"]',
+    );
     expect(ffnResidualChip).not.toBeNull();
     await user.click(ffnResidualChip as Element);
     await waitFor(() => screen.getByTestId("deembed-toggle"));
@@ -1041,15 +994,11 @@ describe("App", () => {
     expect(screen.getByTestId("node-label")).toHaveTextContent(
       "Block 3 - Residual stream · after FFN",
     );
-    expect(await screen.findByTestId("deembed-table")).toHaveTextContent(
-      "world",
-    );
+    expect(await screen.findByTestId("deembed-table")).toHaveTextContent("world");
     expect(screen.getByTestId("deembed-comparison-table")).toHaveTextContent(
       "Baseline",
     );
-    expect(screen.getByTestId("deembed-comparison-table")).toHaveTextContent(
-      "Ablated",
-    );
+    expect(screen.getByTestId("deembed-comparison-table")).toHaveTextContent("Ablated");
   });
 
   it("shows readout movers and highlights a hypothesized token", async () => {
@@ -1110,9 +1059,9 @@ describe("NodeView", () => {
     expect(screen.getByTestId("vocab-contribution-no-effect")).toHaveTextContent(
       "did not change measurably",
     );
-    expect(
-      screen.getByTestId("vocab-contribution-promoted-table"),
-    ).toHaveTextContent("world");
+    expect(screen.getByTestId("vocab-contribution-promoted-table")).toHaveTextContent(
+      "world",
+    );
     expect(screen.queryByTestId("vocab-contribution-plot")).not.toBeInTheDocument();
   });
 

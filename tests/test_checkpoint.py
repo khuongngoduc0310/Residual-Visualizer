@@ -3,10 +3,11 @@ import json
 import numpy as np
 import pytest
 import tensorflow as tf
+from support import VOCABULARY, tiny_config
 
 from checkpoint import (
-    CONFIG_FILENAME,
     CHECKPOINT_FORMAT_VERSION,
+    CONFIG_FILENAME,
     SUPPORTED_KERAS_VERSION,
     SUPPORTED_TENSORFLOW_VERSION,
     VOCABULARY_FILENAME,
@@ -15,25 +16,8 @@ from checkpoint import (
     load_checkpoint,
     save_checkpoint,
 )
-from model import ARCHITECTURE_NAME, ModelConfig, build_model
+from model import ARCHITECTURE_NAME, build_model
 from preprocess import build_text_vectorizer, pad_punctuation
-
-
-VOCABULARY = ["", "[UNK]", "hello", ",", "world", "!"]
-
-
-def tiny_config(**changes):
-    values = {
-        "vocab_size": len(VOCABULARY),
-        "max_len": 6,
-        "embedding_dim": 8,
-        "num_heads": 2,
-        "key_dim": 4,
-        "feed_forward_dim": 8,
-        "dropout_rate": 0.0,
-    }
-    values.update(changes)
-    return ModelConfig(**values)
 
 
 def save_tiny_checkpoint(path):
@@ -62,9 +46,7 @@ def test_checkpoint_round_trip_preserves_predictions_and_token_ids(tmp_path):
     assert loaded.vocabulary == VOCABULARY
     np.testing.assert_allclose(expected, actual, rtol=1e-6, atol=1e-7)
 
-    document = json.loads(
-        (tmp_path / CONFIG_FILENAME).read_text(encoding="utf-8")
-    )
+    document = json.loads((tmp_path / CONFIG_FILENAME).read_text(encoding="utf-8"))
     assert document["format_version"] == CHECKPOINT_FORMAT_VERSION
     assert CHECKPOINT_FORMAT_VERSION == 3
     assert document["architecture"] == ARCHITECTURE_NAME
@@ -195,9 +177,7 @@ def test_save_refuses_model_settings_that_do_not_match_model(tmp_path):
 def test_save_refuses_activity_l1_that_does_not_match_model(tmp_path):
     config = tiny_config()
     language_model = build_model(config)
-    language_model.get_layer(
-        "transformer_block_1"
-    ).feed_forward_activity_l1 = 0.0
+    language_model.get_layer("transformer_block_1").feed_forward_activity_l1 = 0.0
 
     with pytest.raises(CheckpointError, match="transformer layers"):
         save_checkpoint(
@@ -211,9 +191,9 @@ def test_save_refuses_activity_l1_that_does_not_match_model(tmp_path):
 def test_save_refuses_a_nonlinear_ffn_output_projection(tmp_path):
     config = tiny_config()
     language_model = build_model(config)
-    language_model.get_layer("transformer_block_2").ffn_2.activation = (
-        tf.keras.activations.relu
-    )
+    language_model.get_layer(
+        "transformer_block_2"
+    ).ffn_2.activation = tf.keras.activations.relu
 
     with pytest.raises(CheckpointError, match="layer sizes"):
         save_checkpoint(tmp_path, language_model, VOCABULARY, config)

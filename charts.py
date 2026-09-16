@@ -97,7 +97,7 @@ def render_token_map_row(
             zmin=lower,
             zmax=upper,
             colorscale=colorscale,
-            colorbar=dict(title="value"),
+            colorbar={"title": "value"},
             customdata=customdata,
             hovertemplate=(
                 "token %{customdata[0]} \u00b7 dim %{customdata[1]}"
@@ -116,33 +116,33 @@ def render_token_map_row(
             y1=tile_rows - 0.5,
             xref="x",
             yref="y",
-            line=dict(color="#dc2626", width=2),
+            line={"color": "#dc2626", "width": 2},
             fillcolor="rgba(0,0,0,0)",
         )
 
     figure.update_layout(
         title=title,
-        xaxis=dict(
-            tickvals=[
+        xaxis={
+            "tickvals": [
                 token_index * stride + (tile_cols - 1) / 2
                 for token_index in range(token_count)
             ],
-            ticktext=[label for label in labels],
-            tickangle=55,
-            tickfont=dict(size=10, color="#475569"),
-            side="bottom",
-            showgrid=False,
-            zeroline=False,
-        ),
-        yaxis=dict(
-            autorange="reversed",
-            tickvals=[],
-            showgrid=False,
-            zeroline=False,
-        ),
+            "ticktext": list(labels),
+            "tickangle": 55,
+            "tickfont": {"size": 10, "color": "#475569"},
+            "side": "bottom",
+            "showgrid": False,
+            "zeroline": False,
+        },
+        yaxis={
+            "autorange": "reversed",
+            "tickvals": [],
+            "showgrid": False,
+            "zeroline": False,
+        },
         template="plotly_white",
         showlegend=False,
-        margin=dict(l=40, r=20, t=70, b=90),
+        margin={"l": 40, "r": 20, "t": 70, "b": 90},
     )
     return figure
 
@@ -160,7 +160,7 @@ def render_pattern_heatmap(
     matrix = _as_matrix(scores)
     if matrix.shape[0] != matrix.shape[1]:
         raise ValueError("attention pattern must be square in sequence")
-    labels = _labels(token_labels, matrix.shape[0])
+    _labels(token_labels, matrix.shape[0])
     figure = go.Figure(
         go.Heatmap(
             z=matrix,
@@ -169,13 +169,12 @@ def render_pattern_heatmap(
             zmin=bounds[0],
             zmax=bounds[1],
             colorscale=colorscale,
-            colorbar=dict(title=value_label),
+            colorbar={"title": value_label},
             customdata=np.broadcast_to(
                 np.arange(matrix.shape[0])[:, None], matrix.shape
             ),
             hovertemplate=(
-                f"query %{{y}}<br>key %{{x}}<br>{value_label} %{{z:.4f}}"
-                "<extra></extra>"
+                f"query %{{y}}<br>key %{{x}}<br>{value_label} %{{z:.4f}}<extra></extra>"
             ),
         )
     )
@@ -188,16 +187,16 @@ def render_pattern_heatmap(
             y1=selected_query + 0.5,
             xref="x",
             yref="y",
-            line=dict(color="#dc2626", width=2),
+            line={"color": "#dc2626", "width": 2},
             fillcolor="rgba(0,0,0,0)",
         )
     figure.update_layout(
         title=title,
         xaxis_title="Key position",
         yaxis_title="Query position",
-        yaxis=dict(autorange="reversed"),
+        yaxis={"autorange": "reversed"},
         template="plotly_white",
-        margin=dict(l=110, r=20, t=75, b=55),
+        margin={"l": 110, "r": 20, "t": 75, "b": 55},
     )
     return figure
 
@@ -223,9 +222,9 @@ def render_readout_topk(rows: Sequence[dict], token_label: str) -> go.Figure:
         title=f"Most likely next tokens for {token_label}",
         xaxis_title="Probability",
         yaxis_title="Token",
-        yaxis=dict(autorange="reversed"),
+        yaxis={"autorange": "reversed"},
         template="plotly_white",
-        margin=dict(l=90, r=55, t=75, b=55),
+        margin={"l": 90, "r": 55, "t": 75, "b": 55},
     )
     return figure
 
@@ -236,8 +235,10 @@ def render_entropy_strip(
     selected_position: int,
 ) -> go.Figure:
     labels = _labels(token_labels, entropy.shape[0])
-    colors = ["#0f766e" if index != selected_position else "#dc2626"
-              for index in range(entropy.shape[0])]
+    colors = [
+        "#0f766e" if index != selected_position else "#dc2626"
+        for index in range(entropy.shape[0])
+    ]
     figure = go.Figure(
         go.Bar(
             x=labels,
@@ -252,7 +253,7 @@ def render_entropy_strip(
         xaxis_title="Prompt token",
         yaxis_title="Entropy (nats)",
         template="plotly_white",
-        margin=dict(l=55, r=20, t=55, b=90),
+        margin={"l": 55, "r": 20, "t": 55, "b": 90},
     )
     return figure
 
@@ -269,7 +270,7 @@ def render_readout_delta(
     texts = [row["text"] for row in rows]
     deltas = [float(row["delta"]) for row in rows]
     colors = []
-    for row, delta in zip(rows, deltas):
+    for row, delta in zip(rows, deltas, strict=False):
         if highlighted_token_id is not None and row["token_id"] == highlighted_token_id:
             colors.append("#d97706")
         else:
@@ -296,9 +297,9 @@ def render_readout_delta(
         title=f"Ablation effect on next-token probabilities for {token_label}",
         xaxis_title="Ablated - baseline probability",
         yaxis_title="Token",
-        yaxis=dict(autorange="reversed"),
+        yaxis={"autorange": "reversed"},
         template="plotly_white",
-        margin=dict(l=90, r=35, t=75, b=55),
+        margin={"l": 90, "r": 35, "t": 75, "b": 55},
     )
     return figure
 
@@ -313,7 +314,7 @@ def render_vocab_contributions(
     if not rows:
         raise ValueError("vocabulary contribution rows must not be empty")
 
-    labels = [f'{row["text"]} · {row["token_id"]}' for row in rows]
+    labels = [f"{row['text']} · {row['token_id']}" for row in rows]
     values = [float(row["logit_contribution"]) for row in rows]
     figure = go.Figure(
         go.Bar(
@@ -335,9 +336,9 @@ def render_vocab_contributions(
         title=f"Direct logit attribution for {token_label}",
         xaxis_title="Direct logit contribution",
         yaxis_title="Token · ID",
-        yaxis=dict(autorange="reversed"),
+        yaxis={"autorange": "reversed"},
         template="plotly_white",
-        margin=dict(l=110, r=55, t=75, b=55),
+        margin={"l": 110, "r": 55, "t": 75, "b": 55},
     )
     figure.update_xaxes(zeroline=True, zerolinecolor="#64748b", zerolinewidth=1)
     return figure
@@ -351,7 +352,7 @@ def render_vocab_contribution_delta(
     if not rows:
         raise ValueError("vocabulary contribution delta rows must not be empty")
 
-    labels = [f'{row["text"]} · {row["token_id"]}' for row in rows]
+    labels = [f"{row['text']} · {row['token_id']}" for row in rows]
     deltas = [float(row["delta"]) for row in rows]
     customdata = [
         [
@@ -378,9 +379,9 @@ def render_vocab_contribution_delta(
         title=f"Ablation effect on direct logit attribution for {token_label}",
         xaxis_title="Ablated - baseline logit contribution",
         yaxis_title="Token · ID",
-        yaxis=dict(autorange="reversed"),
+        yaxis={"autorange": "reversed"},
         template="plotly_white",
-        margin=dict(l=110, r=35, t=75, b=55),
+        margin={"l": 110, "r": 35, "t": 75, "b": 55},
     )
     figure.update_xaxes(zeroline=True, zerolinecolor="#64748b", zerolinewidth=1)
     return figure

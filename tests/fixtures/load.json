@@ -1,0 +1,20 @@
+{
+  "ok": true,
+  "status": "Model loaded successfully.",
+  "loaded": true,
+  "meta": {
+    "architecture": "three_block_pre_norm_causal_lm",
+    "path": "C:\\Users\\khuon\\AppData\\Local\\Temp\\tmpl0aonyts\\checkpoint",
+    "vocab_size": 6,
+    "max_len": 6,
+    "embedding_dim": 8,
+    "num_heads": 2,
+    "key_dim": 4,
+    "feed_forward_dim": 8,
+    "dropout_rate": 0.0,
+    "num_blocks": 3,
+    "feed_forward_activity_l1": 1e-05
+  },
+  "device_label": "CPU",
+  "summary": "Model: \"three_block_pre_norm_causal_lm\"\n+--------------------------------------------------------------------------+\n| Layer (type)        | Output Shape      |    Param # | Connected to      |\n|---------------------+-------------------+------------+-------------------|\n| token_ids           | (None, None)      |          0 | -                 |\n| (InputLayer)        |                   |            |                   |\n|---------------------+-------------------+------------+-------------------|\n| token_and_position\u2026 | (None, None, 8)   |         96 | token_ids[0][0]   |\n| (TokenAndPositionE\u2026 |                   |            |                   |\n|---------------------+-------------------+------------+-------------------|\n| transformer_block_0 | [(None, None, 8), |        464 | token_and_positi\u2026 |\n| (TransformerBlock)  | (None, 2, None,   |            | token_ids[0][0]   |\n|                     | None)]            |            |                   |\n|---------------------+-------------------+------------+-------------------|\n| transformer_block_1 | [(None, None, 8), |        464 | transformer_bloc\u2026 |\n| (TransformerBlock)  | (None, 2, None,   |            | token_ids[0][0]   |\n|                     | None)]            |            |                   |\n|---------------------+-------------------+------------+-------------------|\n| transformer_block_2 | [(None, None, 8), |        464 | transformer_bloc\u2026 |\n| (TransformerBlock)  | (None, 2, None,   |            | token_ids[0][0]   |\n|                     | None)]            |            |                   |\n|---------------------+-------------------+------------+-------------------|\n| final_output_layer\u2026 | (None, None, 8)   |         16 | transformer_bloc\u2026 |\n| (LayerNormalizatio\u2026 |                   |            |                   |\n|---------------------+-------------------+------------+-------------------|\n| token_probabilities | (None, None, 6)   |         54 | final_output_lay\u2026 |\n| (Dense)             |                   |            |                   |\n+--------------------------------------------------------------------------+\n Total params: 1,558 (6.09 KB)\n Trainable params: 1,558 (6.09 KB)\n Non-trainable params: 0 (0.00 B)\n"
+}

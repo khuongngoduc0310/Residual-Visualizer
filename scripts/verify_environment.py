@@ -11,7 +11,6 @@ import numpy
 import plotly
 import tensorflow as tf
 
-
 EXPECTED = {
     "tensorflow": "2.20.0",
     "keras": "3.13.2",

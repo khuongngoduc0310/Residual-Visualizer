@@ -238,9 +238,7 @@ NODE_BY_KEY: Dict[str, StreamNode] = {node.key: node for node in STREAM_NODES}
 TRACE_ORDER: Tuple[str, ...] = tuple(node.key for node in STREAM_NODES)
 # Every tensor actually captured in the single analysis run. The readout node
 # is virtual: it is derived from the stored probabilities matrix.
-CAPTURED_KEYS: Tuple[str, ...] = tuple(
-    key for key in TRACE_ORDER if key != "readout"
-)
+CAPTURED_KEYS: Tuple[str, ...] = tuple(key for key in TRACE_ORDER if key != "readout")
 
 # Raw states carried by the residual highway.
 RESIDUAL_STATES: Tuple[str, ...] = (
@@ -283,6 +281,7 @@ ABLATABLE_NODES: Tuple[str, ...] = (
 )
 ABLATION_MODES: Tuple[str, ...] = ("zero", "mean")
 ABLATION_SCOPES: Tuple[str, ...] = ("token", "all")
+
 
 @dataclass(frozen=True)
 class BranchSpec:
@@ -330,9 +329,7 @@ BRANCHES: Tuple[BranchSpec, ...] = (
                     block_node_key(block_index, "attention_input_norm"),
                     block_node_key(block_index, "attention_update"),
                 ),
-                observables=(
-                    block_node_key(block_index, "attention_pattern"),
-                ),
+                observables=(block_node_key(block_index, "attention_pattern"),),
                 kind="attention",
                 block_index=block_index,
                 side="above",
@@ -360,9 +357,7 @@ EMBEDDING_COMPONENTS: Tuple[str, ...] = ("token_embeddings", "position_embedding
 
 FAMILY_NODES: Dict[str, Tuple[str, ...]] = {
     node.family: tuple(
-        candidate.key
-        for candidate in STREAM_NODES
-        if candidate.family == node.family
+        candidate.key for candidate in STREAM_NODES if candidate.family == node.family
     )
     for node in STREAM_NODES
 }
@@ -389,9 +384,7 @@ class AblationSpec:
 
     def __post_init__(self) -> None:
         if self.node_key not in ABLATABLE_NODES:
-            raise AblationError(
-                f"Node cannot be ablated: {self.node_key}"
-            )
+            raise AblationError(f"Node cannot be ablated: {self.node_key}")
         try:
             supplied_dims = tuple(self.dims)
         except TypeError as error:
@@ -404,9 +397,7 @@ class AblationSpec:
             if isinstance(dim, bool) or not isinstance(dim, int):
                 raise AblationError("Ablation dimensions must be integers")
             if dim < 0:
-                raise AblationError(
-                    "Ablation dimensions must be non-negative"
-                )
+                raise AblationError("Ablation dimensions must be non-negative")
         object.__setattr__(self, "dims", tuple(sorted(set(supplied_dims))))
         if self.mode not in ABLATION_MODES:
             raise AblationError(
@@ -418,9 +409,7 @@ class AblationSpec:
             )
         if self.scope == "token":
             if self.position is None:
-                raise AblationError(
-                    "A token-scoped ablation requires a token position"
-                )
+                raise AblationError("A token-scoped ablation requires a token position")
             if (
                 isinstance(self.position, bool)
                 or not isinstance(self.position, int)

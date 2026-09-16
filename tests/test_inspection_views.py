@@ -1,15 +1,19 @@
+"""Tests for the inspection, de-embedding, and attribution views."""
+
 import json
-from threading import Event, Thread
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
-import tensorflow as tf
+from support import (
+    VOCABULARY,
+    analyze_fixture,
+    block0,
+    model_manager,
+    write_checkpoint,
+)
 
 import engine
 import inspection_views
-import server
-from checkpoint import CONFIG_FILENAME, CheckpointError, LoadedCheckpoint, save_checkpoint
 from inspection import (
     ABLATABLE_NODES,
     BRANCHES,
@@ -21,460 +25,33 @@ from inspection import (
     VOCAB_CONTRIBUTABLE_NODES,
     block_node_key,
 )
-from model import ARCHITECTURE_NAME, ModelConfig, build_model
-
-
-VOCABULARY = ["", "[UNK]", "hello", ",", "world", "!"]
-
-
-def tiny_config(**changes):
-    values = {
-        "vocab_size": len(VOCABULARY),
-        "max_len": 6,
-        "embedding_dim": 8,
-        "num_heads": 2,
-        "key_dim": 4,
-        "feed_forward_dim": 8,
-        "dropout_rate": 0.0,
-    }
-    values.update(changes)
-    return ModelConfig(**values)
-
-
-def make_checkpoint(path, seed=9):
-    tf.keras.utils.set_random_seed(seed)
-    config = tiny_config()
-    model = build_model(config)
-    save_checkpoint(path, model, VOCABULARY, config)
-    return config
-
-
-def fake_device(label="CPU", tf_device="/CPU:0", is_gpu=False):
-    return engine.ComputeDevice(label=label, tf_device=tf_device, is_gpu=is_gpu)
-
-
-def loaded_manager(path, seed=9):
-    make_checkpoint(path, seed=seed)
-    manager = engine.ModelManager(device_detector=lambda: fake_device())
-    manager.load(str(path))
-    return manager
-
-
-def analyze_fixture(path, prompt="hello , world"):
-    manager = loaded_manager(path)
-    payload = engine.analyze_prompt_payload(manager, prompt)
-    assert payload["ok"]
-    return manager, payload
-
-
-def node_keys():
-    return [node.key for node in STREAM_NODES]
-
-
-def block0(stage):
-    return block_node_key(0, stage)
-
-
-# --------------------------------------------------------------------------- #
-# Checkpoint loading payloads
-
-
-def test_load_payload_loads_checkpoint_and_describes_the_model(tmp_path):
-    config = make_checkpoint(tmp_path)
-    manager = engine.ModelManager(device_detector=lambda: fake_device())
-
-    payload = engine.load_model_payload(manager, str(tmp_path))
-
-    assert payload["ok"]
-    assert payload["loaded"]
-    assert payload["status"] == "Model loaded successfully."
-    assert payload["meta"]["path"] == str(tmp_path)
-    assert payload["meta"]["architecture"] == ARCHITECTURE_NAME
-    assert payload["meta"]["vocab_size"] == config.vocab_size
-    assert payload["meta"]["max_len"] == config.max_len
-    assert payload["meta"]["embedding_dim"] == config.embedding_dim
-    assert payload["meta"]["num_heads"] == config.num_heads
-    assert payload["meta"]["key_dim"] == config.key_dim
-    assert payload["meta"]["feed_forward_dim"] == config.feed_forward_dim
-    assert payload["meta"]["num_blocks"] == 3
-    assert payload["meta"]["feed_forward_activity_l1"] == 1e-5
-    assert payload["device_label"] == "CPU"
-    assert "three_block_pre_norm_causal_lm" in payload["summary"]
-    assert manager.loaded_state is not None
-    assert manager.loaded_state.checkpoint.config == config
-
-
-def test_load_payload_reports_missing_folder_and_has_no_model(tmp_path):
-    manager = engine.ModelManager(device_detector=lambda: fake_device())
-
-    payload = engine.load_model_payload(manager, str(tmp_path / "missing"))
-
-    assert not payload["ok"]
-    assert "Checkpoint could not be loaded" in payload["status"]
-    assert "does not exist" in payload["status"]
-    assert not payload["loaded"]
-    assert payload["meta"]["path"] is None
-    assert payload["device_label"] is None
-    assert payload["summary"] is None
-    assert manager.loaded_state is None
-
-
-def test_load_payload_rejects_an_empty_folder_path():
-    manager = engine.ModelManager(device_detector=lambda: fake_device())
-
-    payload = engine.load_model_payload(manager, "   ")
-
-    assert not payload["ok"]
-    assert "Enter a checkpoint folder path" in payload["status"]
-    assert manager.loaded_state is None
-
-
-def test_failed_replacement_unloads_previous_model(tmp_path):
-    valid_path = tmp_path / "valid"
-    valid_path.mkdir()
-    make_checkpoint(valid_path)
-    manager = engine.ModelManager(device_detector=lambda: fake_device())
-
-    first = manager.load(str(valid_path))
-    second = manager.load(str(tmp_path / "invalid"))
-
-    assert first.success
-    assert not second.success
-    assert manager.loaded_state is None
-
-
-def test_loading_a_second_checkpoint_releases_the_first(tmp_path):
-    first_path = tmp_path / "first"
-    second_path = tmp_path / "second"
-    first_path.mkdir()
-    second_path.mkdir()
-    make_checkpoint(first_path, seed=1)
-    make_checkpoint(second_path, seed=2)
-    clear_calls = []
-    collect_calls = []
-    manager = engine.ModelManager(
-        device_detector=lambda: fake_device(),
-        session_clearer=lambda: clear_calls.append(True),
-        collector=lambda: collect_calls.append(True),
-    )
-
-    manager.load(str(first_path))
-    first_model = manager.loaded_state.checkpoint.model
-    manager.load(str(second_path))
-
-    assert manager.loaded_state.checkpoint_path == second_path
-    assert manager.loaded_state.checkpoint.model is not first_model
-    assert len(clear_calls) == 2
-    assert len(collect_calls) == 2
-
-
-def test_malformed_config_is_reported_without_traceback(tmp_path):
-    make_checkpoint(tmp_path)
-    (tmp_path / CONFIG_FILENAME).write_text("{not json", encoding="utf-8")
-    manager = engine.ModelManager(device_detector=lambda: fake_device())
-
-    result = manager.load(str(tmp_path))
-
-    assert not result.success
-    assert "Checkpoint could not be loaded" in result.status
-    assert "JSONDecodeError" not in result.status
-    assert manager.loaded_state is None
-
-
-def test_mismatched_checkpoint_is_reported_and_clears_previous_model(tmp_path):
-    valid_path = tmp_path / "valid"
-    valid_path.mkdir()
-    make_checkpoint(valid_path)
-    config_path = valid_path / CONFIG_FILENAME
-    document = json.loads(config_path.read_text(encoding="utf-8"))
-    document["model"]["feed_forward_dim"] = 12
-    config_path.write_text(json.dumps(document), encoding="utf-8")
-    manager = engine.ModelManager(device_detector=lambda: fake_device())
-
-    result = manager.load(str(valid_path))
-
-    assert not result.success
-    assert "do not match" in result.status
-    assert manager.loaded_state is None
-
-
-def test_use_loaded_state_requires_and_yields_the_active_model(tmp_path):
-    make_checkpoint(tmp_path)
-    manager = engine.ModelManager(device_detector=lambda: fake_device())
-
-    with pytest.raises(CheckpointError, match="Load a checkpoint"):
-        with manager.use_loaded_state():
-            pass
-
-    manager.load(str(tmp_path))
-    with manager.use_loaded_state() as state:
-        assert state.checkpoint_path == tmp_path
-
-
-def test_inspection_state_holds_the_model_lifecycle_lock():
-    config = tiny_config()
-    checkpoint = LoadedCheckpoint(
-        model=object(), vocabulary=VOCABULARY, config=config
-    )
-    manager = engine.ModelManager(
-        checkpoint_loader=lambda _directory: checkpoint,
-        device_detector=lambda: fake_device(),
-        session_clearer=lambda: None,
-        collector=lambda: 0,
-    )
-    assert manager.load("test-checkpoint").success
-
-    entered = Event()
-    release = Event()
-    clear_done = Event()
-
-    def hold_inspection_state():
-        with manager.use_inspection_state() as (state, session):
-            assert state is not None
-            assert session is None
-            entered.set()
-            assert release.wait(timeout=2)
-
-    def clear_manager():
-        manager.clear()
-        clear_done.set()
-
-    inspection_thread = Thread(target=hold_inspection_state)
-    inspection_thread.start()
-    assert entered.wait(timeout=2)
-
-    clear_thread = Thread(target=clear_manager)
-    clear_thread.start()
-    assert not clear_done.wait(timeout=0.05)
-
-    release.set()
-    inspection_thread.join(timeout=2)
-    clear_thread.join(timeout=2)
-    assert clear_done.is_set()
-    assert manager.loaded_state is None
-
-
-def test_cuda_device_requires_cuda_build_and_visible_gpu(monkeypatch):
-    monkeypatch.setattr(
-        engine.tf.sysconfig,
-        "get_build_info",
-        lambda: {"is_cuda_build": True},
-    )
-    monkeypatch.setattr(engine.tf.test, "is_built_with_cuda", lambda: True)
-    monkeypatch.setattr(
-        engine.tf.config,
-        "list_physical_devices",
-        lambda kind: [SimpleNamespace(name="GPU:0")] if kind == "GPU" else [],
-    )
-    monkeypatch.setattr(
-        engine.tf.config.experimental,
-        "get_device_details",
-        lambda device: {"device_name": "Test NVIDIA GPU"},
-    )
-
-    device = engine.detect_compute_device()
-
-    assert device.is_gpu
-    assert device.tf_device == "/GPU:0"
-    assert device.label == "CUDA GPU: Test NVIDIA GPU"
-
-
-def test_cpu_device_does_not_claim_cuda(monkeypatch):
-    monkeypatch.setattr(
-        engine.tf.sysconfig,
-        "get_build_info",
-        lambda: {"is_cuda_build": False},
-    )
-    monkeypatch.setattr(engine.tf.test, "is_built_with_cuda", lambda: False)
-    monkeypatch.setattr(engine.tf.config, "list_physical_devices", lambda kind: [])
-
-    device = engine.detect_compute_device()
-
-    assert not device.is_gpu
-    assert device.tf_device == "/CPU:0"
-    assert device.label == "CPU"
-
-
-# --------------------------------------------------------------------------- #
-# Prompt analysis payloads
-
-
-def test_analyze_without_model_reports_and_clears():
-    manager = engine.ModelManager(device_detector=lambda: fake_device())
-
-    payload = engine.analyze_prompt_payload(manager, "hello")
-
-    assert not payload["ok"]
-    assert "Load a checkpoint" in payload["status"]
-    assert payload["token_count"] is None
-    assert payload["tokens"] == []
-    assert payload["next_tokens"] == []
-
-
-def test_analyze_payload_renders_token_and_prediction_tables(tmp_path):
-    manager = loaded_manager(tmp_path)
-
-    payload = engine.analyze_prompt_payload(manager, "hello , world")
-
-    assert payload["ok"]
-    assert payload["status"] == "Analysis complete for 3 processed token(s)."
-    assert payload["token_count"] == 3
-    assert payload["max_len"] == 6
-    assert payload["unknown_count"] == 0
-    assert payload["tokens"] == [
-        {"position": 0, "text": "hello", "token_id": 2},
-        {"position": 1, "text": ",", "token_id": 3},
-        {"position": 2, "text": "world", "token_id": 4},
-    ]
-    assert len(payload["next_tokens"]) == 5
-    for token in payload["next_tokens"]:
-        assert set(token) == {"rank", "text", "token_id", "probability"}
-        assert isinstance(token["probability"], float)
-    assert [t["rank"] for t in payload["next_tokens"]] == [1, 2, 3, 4, 5]
-    assert manager.inspection_session is not None
-    assert manager.inspection_session.analysis.token_count == 3
-
-
-def test_failed_analysis_clears_previous_results(tmp_path):
-    make_checkpoint(tmp_path)
-    manager = engine.ModelManager(device_detector=lambda: fake_device())
-    manager.load(str(tmp_path))
-    engine.analyze_prompt_payload(manager, "hello , world")
-    assert manager.inspection_session is not None
-
-    payload = engine.analyze_prompt_payload(manager, "   ")
-
-    assert not payload["ok"]
-    assert payload["status"] == "Enter a prompt first."
-    assert payload["token_count"] is None
-    assert payload["tokens"] == []
-    assert payload["next_tokens"] == []
-    assert manager.inspection_session is None
-
-
-def test_ablation_requires_a_loaded_analysis():
-    manager = engine.ModelManager(device_detector=lambda: fake_device())
-
-    payload = engine.ablate_feature_payload(
-        manager,
-        block0("ffn_hidden"),
-        [0],
-        "zero",
-        "all",
-        None,
-    )
-
-    assert not payload["ok"]
-    assert "Load a checkpoint" in payload["status"]
-
-
-def test_ablation_stores_a_capture_and_exposes_comparisons(tmp_path):
-    manager, _ = analyze_fixture(tmp_path)
-
-    result = engine.ablate_feature_payload(
-        manager,
-        block0("ffn_hidden"),
-        [0, 2],
-        "zero",
-        "token",
-        1,
-    )
-
-    assert result["ok"]
-    assert manager.inspection_session.ablated is not None
-    assert result["ablation"]["dims"] == [0, 2]
-    assert len(result["ablation"]["baseline_values"]) == 2
-
-    diff = inspection_views.inspect_node_payload(
-        manager,
-        block0("ffn_hidden"),
-        1,
-        "diff",
-    )
-    assert diff["state"] == "ready"
-    assert diff["view"] == "diff"
-    assert diff["map_figure"]["data"]
-    assert diff["ablation"]["node_key"] == block0("ffn_hidden")
-
-    readout = inspection_views.inspect_node_payload(
-        manager,
-        "readout",
-        1,
-        "ablated",
-    )
-    assert readout["readout_compare"] is not None
-    assert readout["readout_compare_figure"]["data"]
-    assert len(readout["position_effects"]) == 3
-    for row in readout["readout_compare"]["movers"]:
-        token_id = row["token_id"]
-        baseline_probability = manager.inspection_session.analysis.capture.probabilities[
-            1, token_id
-        ]
-        ablated_probability = manager.inspection_session.ablated.analysis.capture.probabilities[
-            1, token_id
-        ]
-        assert row["delta"] == pytest.approx(
-            ablated_probability - baseline_probability
-        )
-
-
-def test_clearing_ablation_keeps_the_baseline_capture(tmp_path):
-    manager, _ = analyze_fixture(tmp_path)
-    engine.ablate_feature_payload(manager, "output_norm", [0], "zero", "all")
-    assert manager.inspection_session.ablated is not None
-
-    result = engine.clear_ablation_payload(manager)
-
-    assert result == {"ok": True, "status": "Ablation cleared."}
-    assert manager.inspection_session is not None
-    assert manager.inspection_session.ablated is None
-    baseline = inspection_views.inspect_node_payload(manager, "output_norm", 0, "baseline")
-    assert baseline["view"] == "baseline"
 
 
 def test_deembedding_projects_residual_state_through_output_matrix(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
     payload = inspection_views.inspect_node_payload(
-        manager,
-        "output_norm",
-        1,
-        "baseline",
-        None,
-        True,
+        manager, "output_norm", 1, "baseline", deembed=True
     )
 
     assert payload["node"]["deembeddable"] is True
     assert payload["deembed_present"] is True
     assert payload["deembed_figure"]["data"]
-    layer = manager.loaded_state.checkpoint.model.get_layer("token_probabilities")
-    kernel, bias = layer.get_weights()
-    vector = manager.inspection_session.analysis.capture.locations[
-        "output_norm"
-    ][1]
-    logits = vector @ kernel + bias
-    logits -= np.max(logits)
-    probabilities = np.exp(logits)
-    probabilities /= np.sum(probabilities)
+
+    probabilities = manager.inspection_session.analysis.capture.probabilities[1]
     assert payload["deembed_top"][0]["token_id"] == int(np.argmax(probabilities))
     assert payload["deembed_top"][0]["probability"] == pytest.approx(
         float(np.max(probabilities)),
         rel=1e-5,
     )
-    np.testing.assert_allclose(
-        manager.inspection_session.analysis.capture.probabilities[1],
-        probabilities,
-        rtol=1e-5,
-        atol=1e-6,
-    )
+    expected_order = [
+        int(token_id)
+        for token_id in np.argsort(-probabilities)[: len(payload["deembed_top"])]
+    ]
+    assert [row["token_id"] for row in payload["deembed_top"]] == expected_order
 
     hidden = inspection_views.inspect_node_payload(
-        manager,
-        block0("ffn_hidden"),
-        1,
-        "baseline",
-        None,
-        True,
+        manager, block0("ffn_hidden"), 1, "baseline", deembed=True
     )
     assert hidden["node"]["deembeddable"] is False
     assert hidden["deembed_present"] is False
@@ -482,27 +59,27 @@ def test_deembedding_projects_residual_state_through_output_matrix(tmp_path):
 
 def test_deembedding_normalizes_raw_residual_states_before_projection(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
-    payload = inspection_views.inspect_node_payload(
-        manager, block0("ffn_residual"), 1, "baseline", None, True
+    raw = inspection_views.inspect_node_payload(
+        manager,
+        block_node_key(2, "ffn_residual"),
+        1,
+        "baseline",
+        deembed=True,
     )
-    checkpoint = manager.loaded_state.checkpoint
-    raw_vector = manager.inspection_session.analysis.capture.locations[
-        block0("ffn_residual")
-    ][1]
-    final_norm = checkpoint.model.get_layer("final_output_layer_norm")
-    normalized = final_norm(raw_vector[None, None, :]).numpy()[0, 0]
-    kernel, bias = checkpoint.model.get_layer(
-        "token_probabilities"
-    ).get_weights()
-    logits = normalized @ kernel + bias
-    expected = np.exp(logits - np.max(logits))
-    expected /= np.sum(expected)
+    normalized = inspection_views.inspect_node_payload(
+        manager, "output_norm", 1, "baseline", deembed=True
+    )
 
-    assert payload["deembed_present"] is True
-    assert payload["deembed_top"][0]["token_id"] == int(np.argmax(expected))
-    assert payload["deembed_top"][0]["probability"] == pytest.approx(
-        float(np.max(expected)), rel=1e-5
-    )
+    assert raw["deembed_present"] is True
+    assert [row["token_id"] for row in raw["deembed_top"]] == [
+        row["token_id"] for row in normalized["deembed_top"]
+    ]
+    for raw_row, normalized_row in zip(
+        raw["deembed_top"], normalized["deembed_top"], strict=False
+    ):
+        assert raw_row["probability"] == pytest.approx(
+            normalized_row["probability"], rel=1e-5, abs=1e-7
+        )
 
 
 @pytest.mark.parametrize("stage", ["attention_update", "ffn_update"])
@@ -512,13 +89,7 @@ def test_update_vocabulary_contributions_use_final_norm_context(tmp_path, stage)
     position = 1
 
     payload = inspection_views.inspect_node_payload(
-        manager,
-        node_key,
-        position,
-        "baseline",
-        None,
-        False,
-        True,
+        manager, node_key, position, "baseline", vocab_contributions=True
     )
 
     checkpoint = manager.loaded_state.checkpoint
@@ -564,23 +135,22 @@ def test_update_vocabulary_contributions_use_final_norm_context(tmp_path, stage)
 
 def test_update_vocabulary_contributions_exclude_output_bias_and_softmax(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
-    args = (
-        manager,
-        block0("attention_update"),
-        1,
-        "baseline",
-        None,
-        False,
-        True,
-    )
-    before = inspection_views.inspect_node_payload(*args)
-    projection = manager.loaded_state.checkpoint.model.get_layer(
-        "token_probabilities"
-    )
+
+    def inspect():
+        return inspection_views.inspect_node_payload(
+            manager,
+            block0("attention_update"),
+            1,
+            "baseline",
+            vocab_contributions=True,
+        )
+
+    before = inspect()
+    projection = manager.loaded_state.checkpoint.model.get_layer("token_probabilities")
     kernel, bias = projection.get_weights()
     projection.set_weights([kernel, bias + np.linspace(1.0, 3.0, len(bias))])
 
-    after = inspection_views.inspect_node_payload(*args)
+    after = inspect()
 
     def contribution_map(payload):
         return {
@@ -614,7 +184,7 @@ def test_direct_attribution_scales_before_projecting_large_updates(tmp_path):
     )
     final_residual = update.copy()
 
-    contributions = inspection_views._direct_logit_contributions(
+    contributions = inspection_views.direct_logit_contributions(
         update, final_residual, 0, checkpoint
     )
 
@@ -627,13 +197,10 @@ def test_direct_attributions_reconstruct_the_final_logits(tmp_path):
     locations = manager.inspection_session.analysis.capture.locations
     final_residual_key = block_node_key(2, "ffn_residual")
     position = 1
-    component_keys = [
-        "embedding",
-        *VOCAB_CONTRIBUTABLE_NODES,
-    ]
+    component_keys = ["embedding", *VOCAB_CONTRIBUTABLE_NODES]
     contributions = sum(
         (
-            inspection_views._direct_logit_contributions(
+            inspection_views.direct_logit_contributions(
                 locations[key],
                 locations[final_residual_key],
                 position,
@@ -664,13 +231,7 @@ def test_update_vocabulary_contributions_compare_ablated_capture(tmp_path):
     )
 
     payload = inspection_views.inspect_node_payload(
-        manager,
-        block0("ffn_update"),
-        1,
-        "ablated",
-        None,
-        False,
-        True,
+        manager, block0("ffn_update"), 1, "ablated", vocab_contributions=True
     )
 
     assert payload["vocab_contribution_present"] is True
@@ -679,17 +240,15 @@ def test_update_vocabulary_contributions_compare_ablated_capture(tmp_path):
     assert payload["vocab_contribution_figure"]["data"]
     checkpoint = manager.loaded_state.checkpoint
     baseline_locations = manager.inspection_session.analysis.capture.locations
-    ablated_locations = (
-        manager.inspection_session.ablated.analysis.capture.locations
-    )
+    ablated_locations = manager.inspection_session.ablated.analysis.capture.locations
     final_residual_key = block_node_key(2, "ffn_residual")
-    expected_baseline = inspection_views._direct_logit_contributions(
+    expected_baseline = inspection_views.direct_logit_contributions(
         baseline_locations[block0("ffn_update")],
         baseline_locations[final_residual_key],
         1,
         checkpoint,
     )
-    expected_ablated = inspection_views._direct_logit_contributions(
+    expected_ablated = inspection_views.direct_logit_contributions(
         ablated_locations[block0("ffn_update")],
         ablated_locations[final_residual_key],
         1,
@@ -715,13 +274,7 @@ def test_update_vocabulary_contributions_report_no_post_norm_effect(tmp_path):
     engine.ablate_feature_payload(manager, "output_norm", [0], "zero", "token", 1)
 
     payload = inspection_views.inspect_node_payload(
-        manager,
-        block0("attention_update"),
-        1,
-        "ablated",
-        None,
-        False,
-        True,
+        manager, block0("attention_update"), 1, "ablated", vocab_contributions=True
     )
 
     assert payload["vocab_contribution_present"] is True
@@ -738,13 +291,7 @@ def test_vocabulary_contribution_request_ignores_unsupported_nodes(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
 
     payload = inspection_views.inspect_node_payload(
-        manager,
-        block0("ffn_hidden"),
-        1,
-        "baseline",
-        None,
-        False,
-        True,
+        manager, block0("ffn_hidden"), 1, "baseline", vocab_contributions=True
     )
 
     assert payload["node"]["vocab_contributable"] is False
@@ -762,15 +309,9 @@ def test_vocabulary_contribution_failure_returns_inspection_error(
             "Vocabulary contributions were not finite."
         )
 
-    monkeypatch.setattr(inspection_views, "_direct_logit_contributions", fail)
+    monkeypatch.setattr(inspection_views, "populate_vocab_contribution_payload", fail)
     payload = inspection_views.inspect_node_payload(
-        manager,
-        block0("attention_update"),
-        1,
-        "baseline",
-        None,
-        False,
-        True,
+        manager, block0("attention_update"), 1, "baseline", vocab_contributions=True
     )
 
     assert payload["state"] == "error"
@@ -790,12 +331,7 @@ def test_deembedding_compares_baseline_and_ablated_residual_states(tmp_path):
     )
 
     payload = inspection_views.inspect_node_payload(
-        manager,
-        block0("ffn_residual"),
-        1,
-        "ablated",
-        None,
-        True,
+        manager, block0("ffn_residual"), 1, "ablated", deembed=True
     )
 
     assert payload["deembed_present"] is True
@@ -825,27 +361,23 @@ def test_deembedding_same_ablated_residual_keeps_projected_predictions(tmp_path)
         position,
     )
     payload = inspection_views.inspect_node_payload(
-        manager,
-        block0("ffn_residual"),
-        position,
-        "ablated",
-        None,
-        True,
+        manager, block0("ffn_residual"), position, "ablated", deembed=True
     )
 
     assert result["ok"]
-    assert manager.inspection_session.ablated.analysis.capture.locations[
-        block0("ffn_residual")
-    ][position, dimension] == 0.0
+    assert (
+        manager.inspection_session.ablated.analysis.capture.locations[
+            block0("ffn_residual")
+        ][position, dimension]
+        == 0.0
+    )
     assert payload["deembed_present"] is True
     assert payload["deembed_state_changed"] is True
     assert payload["deembed_has_effect"] is True
     assert payload["deembed_top"]
     assert payload["deembed_movers"]
     assert payload["deembed_figure"]["data"]
-    assert all(
-        np.isfinite(row["probability"]) for row in payload["deembed_top"]
-    )
+    assert all(np.isfinite(row["probability"]) for row in payload["deembed_top"])
     assert any(abs(row["delta"]) > 1e-12 for row in payload["deembed_movers"])
 
 
@@ -858,13 +390,9 @@ def test_non_baseline_view_requires_an_active_ablation(tmp_path):
     assert "No ablation is active" in payload["message"]
 
 
-# --------------------------------------------------------------------------- #
-# Inspection payloads
-
-
 def test_inspect_before_analysis_reports_awaiting_state(tmp_path):
-    make_checkpoint(tmp_path)
-    manager = engine.ModelManager(device_detector=lambda: fake_device())
+    write_checkpoint(tmp_path)
+    manager = model_manager()
     manager.load(str(tmp_path))
 
     payload = inspection_views.inspect_node_payload(manager)
@@ -935,9 +463,7 @@ def test_inspect_uses_stored_data_without_running_the_model(tmp_path):
     checkpoint = manager.loaded_state.checkpoint
     object.__setattr__(checkpoint, "model", ExplodingModel())
 
-    payload = inspection_views.inspect_node_payload(
-        manager, block0("ffn_hidden"), 1
-    )
+    payload = inspection_views.inspect_node_payload(manager, block0("ffn_hidden"), 1)
 
     assert payload["state"] == "ready"
     assert payload["node"]["key"] == block0("ffn_hidden")
@@ -1021,8 +547,7 @@ def test_embedding_components_node_views(tmp_path):
         assert payload["shape"] == {"seq_len": 3, "width": 8}
         assert payload["tile"] == {"rows": 2, "cols": 4}
         assert payload["map_figure"]["data"]
-        assert payload["map_figure"]["data"][0]["zmin"] == \
-            payload["scale"]["lower"]
+        assert payload["map_figure"]["data"][0]["zmin"] == payload["scale"]["lower"]
 
 
 def test_readout_node_returns_topk_rows_and_entropy(tmp_path):
@@ -1040,67 +565,37 @@ def test_readout_node_returns_topk_rows_and_entropy(tmp_path):
     assert {row["rank"] for row in inspected["readout_rows"]} == set(range(1, 7))
     probabilities = [row["probability"] for row in inspected["readout_rows"]]
     assert probabilities == sorted(probabilities, reverse=True)
-    assert probabilities[0] == max(
-        analysis.capture.probabilities[2].tolist()
-    )
+    assert probabilities[0] == max(analysis.capture.probabilities[2].tolist())
     assert inspected["capture"]["max"] >= inspected["capture"]["min"]
 
 
 def test_every_node_renders_a_view_after_analysis(tmp_path):
     manager, _ = analyze_fixture(tmp_path)
+    keys = [node.key for node in STREAM_NODES]
 
     for node in STREAM_NODES:
         payload = inspection_views.inspect_node_payload(manager, node.key, 0)
         assert payload["state"] == "ready", node.key
-        assert payload["node"]["trace_index"] == node_keys().index(node.key)
+        assert payload["node"]["trace_index"] == keys.index(node.key)
         assert payload["selected_position"] == 0
 
 
 def test_load_payloads_are_json_serializable(tmp_path):
-    make_checkpoint(tmp_path)
-    manager = engine.ModelManager(device_detector=lambda: fake_device())
+    write_checkpoint(tmp_path)
+    manager = model_manager()
     loaded = engine.load_model_payload(manager, str(tmp_path))
     engine.analyze_prompt_payload(manager, "hello , world")
-    activation = inspection_views.inspect_node_payload(
-        manager, block0("ffn_update"), 1
-    )
+    activation = inspection_views.inspect_node_payload(manager, block0("ffn_update"), 1)
     pattern = inspection_views.inspect_node_payload(
         manager, block0("attention_pattern"), 1
     )
     readout = inspection_views.inspect_node_payload(manager, "readout", 2)
     contribution = inspection_views.inspect_node_payload(
-        manager,
-        block0("attention_update"),
-        1,
-        "baseline",
-        None,
-        False,
-        True,
+        manager, block0("attention_update"), 1, "baseline", vocab_contributions=True
     )
 
     for payload in (loaded, activation, pattern, readout, contribution):
         json.loads(json.dumps(payload, allow_nan=False))
-
-
-def test_loading_a_new_checkpoint_clears_the_stored_capture(tmp_path):
-    first = tmp_path / "first"
-    second = tmp_path / "second"
-    first.mkdir()
-    second.mkdir()
-    make_checkpoint(first, seed=1)
-    make_checkpoint(second, seed=2)
-    manager = engine.ModelManager(device_detector=lambda: fake_device())
-    manager.load(str(first))
-    engine.analyze_prompt_payload(manager, "hello , world")
-    assert manager.inspection_session is not None
-
-    manager.load(str(second))
-
-    assert manager.inspection_session is None
-
-
-# --------------------------------------------------------------------------- #
-# Static options and server construction
 
 
 def test_options_payload_describes_the_stream_graph():
@@ -1139,16 +634,10 @@ def test_options_payload_describes_the_stream_graph():
     assert graph["branches"][-1]["block_index"] == 2
     assert graph["components"] == list(EMBEDDING_COMPONENTS)
     assert {
-        node["key"]
-        for node in graph["nodes"]
-        if node["vocab_contributable"]
+        node["key"] for node in graph["nodes"] if node["vocab_contributable"]
     } == set(VOCAB_CONTRIBUTABLE_NODES)
-    assert [node["key"] for node in payload["ablation_nodes"]] == list(
-        ABLATABLE_NODES
-    )
-    output_norm = next(
-        node for node in graph["nodes"] if node["key"] == "output_norm"
-    )
+    assert [node["key"] for node in payload["ablation_nodes"]] == list(ABLATABLE_NODES)
+    output_norm = next(node for node in graph["nodes"] if node["key"] == "output_norm")
     assert output_norm["normalized"] is True
     assert output_norm["next_key"] == "readout"
     block_two_hidden = next(
@@ -1160,18 +649,3 @@ def test_options_payload_describes_the_stream_graph():
     assert block_two_hidden["stage"] == "ffn_hidden"
     assert block_two_hidden["width_source"] == "ffn"
     assert payload["locations"][0]["key"] == "token_embeddings"
-
-
-def test_create_app_builds_endpoints_without_launching():
-    demo = server.create_app(engine.ModelManager(device_detector=lambda: fake_device()))
-
-    assert isinstance(demo, server.gr.Blocks)
-    api_names = {fn.api_name for fn in demo.fns.values()}
-    assert {
-        "load_checkpoint",
-        "analyze_prompt",
-        "ablate_feature",
-        "clear_ablation",
-        "inspect_node",
-        "options",
-    } <= api_names

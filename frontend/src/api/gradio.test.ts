@@ -26,7 +26,8 @@ afterEach(() => {
 
 describe("callApi", () => {
   it("posts positional args and unwraps the single output payload", async () => {
-    const fetchMock = vi.fn()
+    const fetchMock = vi
+      .fn()
       .mockResolvedValueOnce(jsonResponse(200, { event_id: "evt-1" }))
       .mockResolvedValueOnce(
         sseResponse(200, 'event: complete\ndata: [{"ok":true}]\n\n'),
@@ -51,9 +52,9 @@ describe("callApi", () => {
   });
 
   it("surfaces server rejections", async () => {
-    const fetchMock = vi.fn().mockResolvedValueOnce(
-      jsonResponse(422, { detail: "invalid input" }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(422, { detail: "invalid input" }));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(callApi("options", ["x"])).rejects.toThrow(
@@ -62,7 +63,8 @@ describe("callApi", () => {
   });
 
   it("throws when the server never yields an output", async () => {
-    const fetchMock = vi.fn()
+    const fetchMock = vi
+      .fn()
       .mockResolvedValueOnce(jsonResponse(200, { event_id: "evt-2" }))
       .mockResolvedValueOnce(sseResponse(200, "event: heartbeat\ndata: {}\n\n"));
     vi.stubGlobal("fetch", fetchMock);
@@ -73,35 +75,22 @@ describe("callApi", () => {
   });
 
   it("appends the vocabulary contribution flag to inspect requests", async () => {
-    const fetchMock = vi.fn()
+    const fetchMock = vi
+      .fn()
       .mockResolvedValueOnce(jsonResponse(200, { event_id: "evt-3" }))
       .mockResolvedValueOnce(
         sseResponse(200, 'event: complete\ndata: [{"state":"ready"}]\n\n'),
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    await inspectNode(
-      "blocks.0.attention_update",
-      1,
-      "baseline",
-      null,
-      false,
-      true,
-    );
+    await inspectNode("blocks.0.attention_update", 1, "baseline", null, false, true);
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/gradio/gradio_api/call/inspect_node",
       expect.objectContaining({
         body: JSON.stringify({
-          data: [
-            "blocks.0.attention_update",
-            1,
-            "baseline",
-            null,
-            false,
-            true,
-          ],
+          data: ["blocks.0.attention_update", 1, "baseline", null, false, true],
         }),
       }),
     );

@@ -31,7 +31,6 @@ from inspection import (
 )
 from model import ARCHITECTURE_NAME, ModelConfig
 
-
 LOGGER = logging.getLogger(__name__)
 
 
@@ -352,9 +351,7 @@ def analyze_prompt_payload(manager: ModelManager, prompt: str) -> dict:
         )
     return {
         "ok": True,
-        "status": (
-            f"Analysis complete for {analysis.token_count} processed token(s)."
-        ),
+        "status": (f"Analysis complete for {analysis.token_count} processed token(s)."),
         "token_count": analysis.token_count,
         "max_len": analysis.max_len,
         "unknown_count": analysis.unknown_count,
@@ -363,7 +360,8 @@ def analyze_prompt_payload(manager: ModelManager, prompt: str) -> dict:
     }
 
 
-def _ablation_info(result: Optional[AblatedResult]) -> Optional[dict]:
+def ablation_info(result: Optional[AblatedResult]) -> Optional[dict]:
+    """Serialize the active ablation for API payloads."""
     if result is None:
         return None
     spec = result.spec
@@ -396,9 +394,7 @@ def _ablation_status(
     dim_label = ", ".join(str(dim) for dim in spec.dims)
     dimension_word = "dimension" if len(spec.dims) == 1 else "dimensions"
     dimension_verb = "was" if len(spec.dims) == 1 else "were"
-    probability_delta = (
-        ablated.capture.probabilities - baseline.capture.probabilities
-    )
+    probability_delta = ablated.capture.probabilities - baseline.capture.probabilities
     position_effect = 0.5 * np.sum(np.abs(probability_delta), axis=1)
     strongest_position = int(np.argmax(position_effect))
     if np.any(position_effect > 1e-12):
@@ -481,7 +477,7 @@ def ablate_feature_payload(
     return {
         "ok": True,
         "status": status,
-        "ablation": _ablation_info(result),
+        "ablation": ablation_info(result),
         "strongest_position": strongest_position,
     }
 
@@ -498,8 +494,9 @@ __all__ = [
     "LoadResult",
     "LoadedState",
     "ModelManager",
-    "analyze_prompt_payload",
     "ablate_feature_payload",
+    "ablation_info",
+    "analyze_prompt_payload",
     "clear_ablation_payload",
     "config_metadata",
     "detect_compute_device",

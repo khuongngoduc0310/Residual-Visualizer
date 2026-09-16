@@ -5,7 +5,6 @@ from typing import Optional, Sequence
 import tensorflow as tf
 from tensorflow.keras import layers
 
-
 PADDING_TOKEN = ""
 UNKNOWN_TOKEN = "[UNK]"
 PADDING_TOKEN_ID = 0
@@ -13,9 +12,7 @@ UNKNOWN_TOKEN_ID = 1
 STANDARDIZE = "lower"
 SPLIT = "whitespace"
 
-_PUNCTUATION_PATTERN = re.compile(
-    f"([{re.escape(string.punctuation)}\\n])"
-)
+_PUNCTUATION_PATTERN = re.compile(f"([{re.escape(string.punctuation)}\\n])")
 
 
 def pad_punctuation(text: str) -> str:

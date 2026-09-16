@@ -1,20 +1,8 @@
 export type NodeKind =
-  | "component"
-  | "stream"
-  | "update"
-  | "ln"
-  | "hidden"
-  | "pattern"
-  | "readout";
+  "component" | "stream" | "update" | "ln" | "hidden" | "pattern" | "readout";
 
 export type NodeFamily =
-  | "components"
-  | "stream_raw"
-  | "updates"
-  | "norm"
-  | "hidden"
-  | "pattern"
-  | "readout";
+  "components" | "stream_raw" | "updates" | "norm" | "hidden" | "pattern" | "readout";
 
 export interface GraphNode {
   key: string;
@@ -143,12 +131,7 @@ export interface TokenChoice {
 }
 
 export type FigureKind =
-  | "activation"
-  | "hidden"
-  | "pattern"
-  | "readout_topk"
-  | "readout_delta"
-  | null;
+  "activation" | "hidden" | "pattern" | "readout_topk" | "readout_delta" | null;
 
 export type InspectView = "baseline" | "ablated" | "diff";
 

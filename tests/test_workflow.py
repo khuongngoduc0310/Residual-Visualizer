@@ -1,28 +1,22 @@
 import numpy as np
 import tensorflow as tf
+from support import VOCABULARY, tiny_config
 
 import engine
 import inspection_views
-from checkpoint import LoadedCheckpoint, load_checkpoint, save_checkpoint
 from charts import grid_shape
+from checkpoint import LoadedCheckpoint, load_checkpoint, save_checkpoint
 from inspection import STREAM_NODES, TRACE_ORDER, block_node_key, capture_locations
-from model import NUM_TRANSFORMER_BLOCKS, ModelConfig, build_model
+from model import NUM_TRANSFORMER_BLOCKS, build_model
 
 
-VOCABULARY = ["", "[UNK]", "hello", ",", "world", "!"]
+def _wide_config():
+    return tiny_config(feed_forward_dim=12, dropout_rate=0.5)
 
 
 def test_cpu_checkpoint_to_all_stream_node_views(tmp_path):
     """Exercise the complete local path using an explicitly CPU-bound model."""
-    config = ModelConfig(
-        vocab_size=len(VOCABULARY),
-        max_len=6,
-        embedding_dim=8,
-        num_heads=2,
-        key_dim=4,
-        feed_forward_dim=12,
-        dropout_rate=0.5,
-    )
+    config = _wide_config()
     with tf.device("/CPU:0"):
         tf.keras.utils.set_random_seed(9)
         model = build_model(config)
@@ -45,7 +39,6 @@ def test_cpu_checkpoint_to_all_stream_node_views(tmp_path):
     assert len(analysis.next_tokens) == 5
     assert set(analysis.capture.locations) == set(TRACE_ORDER[:-1])
 
-    token_labels = [f"{token.position}: {token.text}" for token in analysis.tokens]
     for node in STREAM_NODES:
         if node.kind == "readout":
             continue
@@ -72,9 +65,7 @@ def test_cpu_checkpoint_to_all_stream_node_views(tmp_path):
         z_rows = map_figure["data"][0]["z"]
         assert len(z_rows) == rows
         stride = cols + (1 if token_count > 1 else 0)
-        assert len(z_rows[0]) == stride * token_count - (
-            1 if token_count > 1 else 0
-        )
+        assert len(z_rows[0]) == stride * token_count - (1 if token_count > 1 else 0)
         z = np.asarray(z_rows, dtype=float)  # None gap cells become NaN
         gap_columns = set()
         for index in range(1, token_count):
@@ -96,15 +87,7 @@ def test_cpu_checkpoint_to_all_stream_node_views(tmp_path):
 
 
 def _captured(seed=4):
-    config = ModelConfig(
-        vocab_size=len(VOCABULARY),
-        max_len=6,
-        embedding_dim=8,
-        num_heads=2,
-        key_dim=4,
-        feed_forward_dim=12,
-        dropout_rate=0.5,
-    )
+    config = _wide_config()
     tf.keras.utils.set_random_seed(seed)
     model = build_model(config)
     checkpoint = LoadedCheckpoint(model=model, vocabulary=VOCABULARY, config=config)
@@ -127,28 +110,28 @@ def test_residual_updates_equal_the_stream_difference():
     locations = captured.locations
     input_key = "embedding"
     for block_index in range(NUM_TRANSFORMER_BLOCKS):
-        key = lambda stage: block_node_key(block_index, stage)
+        attention_update = block_node_key(block_index, "attention_update")
+        attention_residual = block_node_key(block_index, "attention_residual")
+        ffn_update = block_node_key(block_index, "ffn_update")
+        ffn_residual = block_node_key(block_index, "ffn_residual")
         np.testing.assert_allclose(
-            locations[key("attention_update")],
-            locations[key("attention_residual")] - locations[input_key],
+            locations[attention_update],
+            locations[attention_residual] - locations[input_key],
             atol=1e-6,
         )
         np.testing.assert_allclose(
-            locations[key("ffn_update")],
-            locations[key("ffn_residual")]
-            - locations[key("attention_residual")],
+            locations[ffn_update],
+            locations[ffn_residual] - locations[attention_residual],
             atol=1e-6,
         )
-        input_key = key("ffn_residual")
+        input_key = ffn_residual
 
 
 def test_attention_pattern_rows_are_normalized_and_causal():
     captured = _captured()
 
     for block_index in range(NUM_TRANSFORMER_BLOCKS):
-        pattern = captured.locations[
-            block_node_key(block_index, "attention_pattern")
-        ]
+        pattern = captured.locations[block_node_key(block_index, "attention_pattern")]
         assert pattern.shape == (3, 3)
         np.testing.assert_allclose(pattern.sum(axis=1), np.ones(3), atol=1e-5)
         assert np.all(pattern[np.triu_indices(3, k=1)] == 0.0)

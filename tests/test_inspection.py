@@ -1,14 +1,15 @@
 import numpy as np
 import pytest
 import tensorflow as tf
+from support import VOCABULARY, tiny_config, write_checkpoint
 
-from checkpoint import load_checkpoint, save_checkpoint
+from checkpoint import load_checkpoint
 from inspection import (
     ABLATABLE_NODES,
-    CAPTURED_KEYS,
     BLOCK_NODE_STAGES,
-    DEFAULT_NODE_KEY,
+    CAPTURED_KEYS,
     DEEMBEDDABLE_NODES,
+    DEFAULT_NODE_KEY,
     FAMILY_NODES,
     RESIDUAL_STATES,
     SPINE_NODES,
@@ -16,36 +17,22 @@ from inspection import (
     VOCAB_CONTRIBUTABLE_NODES,
     CapturedRun,
     InspectionError,
-    capture_locations,
     block_node_key,
+    capture_locations,
     family_keys,
     node_spec,
 )
-from model import NUM_TRANSFORMER_BLOCKS, ModelConfig, build_model
-
-
-VOCABULARY = ["", "[UNK]", "hello", ",", "world", "!"]
-
-
-def tiny_config():
-    return ModelConfig(
-        vocab_size=len(VOCABULARY),
-        max_len=6,
-        embedding_dim=8,
-        num_heads=2,
-        key_dim=4,
-        feed_forward_dim=12,
-        dropout_rate=0.5,
-    )
+from model import NUM_TRANSFORMER_BLOCKS
 
 
 @pytest.fixture(scope="module")
 def loaded_checkpoint(tmp_path_factory):
     directory = tmp_path_factory.mktemp("checkpoint")
-    tf.keras.utils.set_random_seed(9)
-    config = tiny_config()
-    model = build_model(config)
-    save_checkpoint(directory, model, VOCABULARY, config)
+    write_checkpoint(
+        directory,
+        seed=9,
+        config=tiny_config(feed_forward_dim=12, dropout_rate=0.5),
+    )
     return load_checkpoint(directory)
 
 
@@ -113,31 +100,32 @@ def test_captured_locations_preserve_the_pre_norm_residual_highway(
     ).locations
     residual_key = "embedding"
     for block_index in range(NUM_TRANSFORMER_BLOCKS):
-        key = lambda stage: block_node_key(block_index, stage)
+        attention_residual = block_node_key(block_index, "attention_residual")
+        attention_update = block_node_key(block_index, "attention_update")
+        ffn_residual = block_node_key(block_index, "ffn_residual")
+        ffn_update = block_node_key(block_index, "ffn_update")
         np.testing.assert_allclose(
-            captured[key("attention_residual")],
-            captured[residual_key] + captured[key("attention_update")],
+            captured[attention_residual],
+            captured[residual_key] + captured[attention_update],
             atol=1e-6,
         )
         np.testing.assert_allclose(
-            captured[key("ffn_residual")],
-            captured[key("attention_residual")] + captured[key("ffn_update")],
+            captured[ffn_residual],
+            captured[attention_residual] + captured[ffn_update],
             atol=1e-6,
         )
-        block = loaded_checkpoint.model.get_layer(
-            f"transformer_block_{block_index}"
-        )
+        block = loaded_checkpoint.model.get_layer(f"transformer_block_{block_index}")
         np.testing.assert_allclose(
-            captured[key("attention_input_norm")],
+            captured[block_node_key(block_index, "attention_input_norm")],
             block.attention_input_norm(captured[residual_key]),
             atol=1e-6,
         )
         np.testing.assert_allclose(
-            captured[key("ffn_input_norm")],
-            block.ffn_input_norm(captured[key("attention_residual")]),
+            captured[block_node_key(block_index, "ffn_input_norm")],
+            block.ffn_input_norm(captured[attention_residual]),
             atol=1e-6,
         )
-        residual_key = key("ffn_residual")
+        residual_key = ffn_residual
     final_norm = loaded_checkpoint.model.get_layer("final_output_layer_norm")
     np.testing.assert_allclose(
         captured["output_norm"],

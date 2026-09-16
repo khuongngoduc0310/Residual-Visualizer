@@ -1,19 +1,14 @@
 import json
 from pathlib import Path
 
-
 NOTEBOOK_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "notebook"
-    / "compact_gpt_retrain_2.ipynb"
+    Path(__file__).resolve().parents[1] / "notebook" / "compact_gpt_retrain_2.ipynb"
 )
 
 
 def test_training_notebook_uses_the_supported_three_block_configuration():
     notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
-    source = "\n".join(
-        "".join(cell.get("source", [])) for cell in notebook["cells"]
-    )
+    source = "\n".join("".join(cell.get("source", [])) for cell in notebook["cells"])
 
     assert "ARCHITECTURE_NAME == 'three_block_pre_norm_causal_lm'" in source
     assert "EMBEDDING_DIM = 1024" in source

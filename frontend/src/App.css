@@ -27,8 +27,8 @@ body {
   padding: 0;
   background: #ffffff;
   color: var(--ink);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 button {
@@ -429,8 +429,7 @@ button {
   border: 1px solid var(--line-soft);
   border-radius: 12px;
   background:
-    linear-gradient(90deg, rgba(248, 250, 252, 0.95), transparent 42px),
-    #ffffff;
+    linear-gradient(90deg, rgba(248, 250, 252, 0.95), transparent 42px), #ffffff;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
@@ -556,7 +555,10 @@ button {
   border-radius: 999px;
   padding: 5px 12px;
   cursor: pointer;
-  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
 }
 
 .ct-node-chip:hover {

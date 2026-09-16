@@ -31,10 +31,7 @@ EXCLUDED_TOP = {".venv", ".git", "frontend", "tests", "checkpoints", "__pycache_
 def interesting(change, path):
     """Keep watchfiles from descending into the excluded directories."""
     relative = Path(path).resolve().relative_to(ROOT)
-    return (
-        relative.parts[0] not in EXCLUDED_TOP
-        and "__pycache__" not in relative.parts
-    )
+    return relative.parts[0] not in EXCLUDED_TOP and "__pycache__" not in relative.parts
 
 
 def start_backend() -> subprocess.Popen:
@@ -64,9 +61,7 @@ def main() -> None:
             yield_on_timeout=True,
             stop_event=stop_event,
         ):
-            restart = any(
-                Path(path).suffix == ".py" for _change, path in changes
-            )
+            restart = any(Path(path).suffix == ".py" for _change, path in changes)
             if not restart:
                 continue
             print("change detected; restarting backend", flush=True)

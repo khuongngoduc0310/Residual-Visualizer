@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as engine from "./api/client";
 import { CtApiError } from "./api/gradio";
+import { DEFAULT_CHECKPOINT } from "./constants";
 import { NodeStrip } from "./components/NodeStrip";
 import type { NodeStripItem } from "./components/NodeStrip";
 import { NodeView } from "./components/NodeView";
@@ -15,10 +16,7 @@ import type {
   OptionsPayload,
 } from "./types";
 import "./App.css";
-
 const AWAITING_COPY = "Analyze a prompt to capture every internal location.";
-export const DEFAULT_CHECKPOINT =
-  import.meta.env.VITE_DEFAULT_CHECKPOINT ?? "";
 
 function errorMessage(error: unknown): string {
   return error instanceof CtApiError || error instanceof Error
@@ -34,7 +32,10 @@ function parseAblationDimensions(
   value: string,
   width: number | null | undefined,
 ): { dims: number[]; error: string } {
-  const parts = value.trim().split(/[\s,]+/).filter(Boolean);
+  const parts = value
+    .trim()
+    .split(/[\s,]+/)
+    .filter(Boolean);
   if (parts.length === 0) {
     return { dims: [], error: "Enter at least one dimension." };
   }
@@ -91,8 +92,7 @@ export function App() {
   const [view, setView] = useState<InspectView>("baseline");
   const [activeAblation, setActiveAblation] = useState<AblationInfo | null>(null);
   const [deembedEnabled, setDeembedEnabled] = useState(false);
-  const [vocabContributionsEnabled, setVocabContributionsEnabled] =
-    useState(false);
+  const [vocabContributionsEnabled, setVocabContributionsEnabled] = useState(false);
   const [ablationNode, setAblationNode] = useState("");
   const [ablationDimsText, setAblationDimsText] = useState("0");
   const [ablationMode, setAblationMode] = useState<"zero" | "mean">("zero");
@@ -201,19 +201,19 @@ export function App() {
                   true,
                 )
               : requestedDeembed
-              ? await engine.inspectNode(
-                  key,
-                  position,
-                  requestedView,
-                  requestedHighlight,
-                  true,
-                )
-              : await engine.inspectNode(
-                  key,
-                  position,
-                  requestedView,
-                  requestedHighlight,
-                );
+                ? await engine.inspectNode(
+                    key,
+                    position,
+                    requestedView,
+                    requestedHighlight,
+                    true,
+                  )
+                : await engine.inspectNode(
+                    key,
+                    position,
+                    requestedView,
+                    requestedHighlight,
+                  );
         if (requestId !== inspectRequestId.current) return result;
         if (result.state === "error") {
           setInspectError(result.message);
@@ -456,14 +456,7 @@ export function App() {
       setHighlightToken("");
       setAblationStatus(result.status);
       const intent = inspectIntent.current;
-      await runInspect(
-        intent.key,
-        intent.position,
-        "baseline",
-        null,
-        false,
-        false,
-      );
+      await runInspect(intent.key, intent.position, "baseline", null, false, false);
     } catch (error) {
       setAblationError(errorMessage(error));
     } finally {
@@ -502,10 +495,7 @@ export function App() {
       : ablationWidthSource === "model"
         ? loadResult?.meta.embedding_dim
         : null;
-  const parsedAblation = parseAblationDimensions(
-    ablationDimsText,
-    ablationWidth,
-  );
+  const parsedAblation = parseAblationDimensions(ablationDimsText, ablationWidth);
   const dimensionValid = parsedAblation.error === "";
 
   return (
@@ -555,7 +545,9 @@ export function App() {
               className={`ct-status ${loadResult?.loaded ? "ct-status-ok" : "ct-status-error"}`}
               data-testid="load-status"
             >
-              {loadError || loadResult?.status || "No model loaded. Enter an extracted checkpoint folder."}
+              {loadError ||
+                loadResult?.status ||
+                "No model loaded. Enter an extracted checkpoint folder."}
             </p>
 
             <h2 className="ct-section-label">Runtime</h2>
@@ -645,9 +637,7 @@ export function App() {
               className={`ct-status ${analysis?.ok ? "ct-status-ok" : analysis ? "ct-status-error" : ""}`}
               data-testid="analysis-status"
             >
-              {analyzeError ||
-                analysis?.status ||
-                "Load a model, then enter a prompt."}
+              {analyzeError || analysis?.status || "Load a model, then enter a prompt."}
             </p>
             {analysis?.ok && (
               <>
@@ -656,8 +646,8 @@ export function App() {
                   {analysis.unknown_count ? (
                     <span className="ct-warning">
                       {" "}
-                      · contains {analysis.unknown_count} unknown token(s),
-                      mapped to [UNK]
+                      · contains {analysis.unknown_count} unknown token(s), mapped to
+                      [UNK]
                     </span>
                   ) : null}
                 </p>
@@ -693,8 +683,8 @@ export function App() {
           <section className="ct-panel" data-testid="ablation-panel">
             <h2 className="ct-section-label">03 / TEST A FEATURE</h2>
             <p className="ct-muted ct-panel-copy">
-              Remove one or more activation dimensions, rerun the model, and
-              inspect which downstream predictions move.
+              Remove one or more activation dimensions, rerun the model, and inspect
+              which downstream predictions move.
             </p>
             <label className="ct-select-wrap">
               <span className="ct-field-label">Activation node</span>
@@ -764,8 +754,8 @@ export function App() {
               </select>
             </label>
             <p className="ct-input-hint">
-              Enter comma- or space-separated dim indices shown when hovering a
-              heatmap. Mean ablation uses the other prompt tokens.
+              Enter comma- or space-separated dim indices shown when hovering a heatmap.
+              Mean ablation uses the other prompt tokens.
             </p>
             <div className="ct-button-row">
               <button
@@ -801,7 +791,7 @@ export function App() {
               {ablationError ||
                 ablationStatus ||
                 "Analyze a prompt, choose one or more dimensions, then ablate " +
-                "them."}
+                  "them."}
             </p>
           </section>
         </aside>
@@ -870,8 +860,8 @@ export function App() {
               )
             ) : (
               <p className="ct-muted" data-testid="diagram-collapsed-note">
-                The diagram is collapsed so the map stays on screen. Expand it
-                any time to click a node on the wiring itself.
+                The diagram is collapsed so the map stays on screen. Expand it any time
+                to click a node on the wiring itself.
               </p>
             )}
           </section>
@@ -897,7 +887,9 @@ export function App() {
                   ◀ Previous
                 </button>
                 <span className="ct-trace-count">
-                  {graphNode ? `${graphNode.trace_index + 1} / ${graphNode.trace_count}` : ""}
+                  {graphNode
+                    ? `${graphNode.trace_index + 1} / ${graphNode.trace_count}`
+                    : ""}
                 </span>
                 <button
                   type="button"
@@ -926,8 +918,8 @@ export function App() {
                 <p className="ct-explanation">{inspectResult.node.explanation}</p>
                 {inspectResult.node.normalized && (
                   <p className="ct-muted">
-                    Layer normalization rescales every token, so magnitude
-                    comparisons across tokens are not meaningful here.
+                    Layer normalization rescales every token, so magnitude comparisons
+                    across tokens are not meaningful here.
                   </p>
                 )}
               </div>
@@ -971,14 +963,16 @@ export function App() {
             </div>
 
             {inspectReady && inspectResult ? (
-              <div className="ct-stat-box ct-stat-box-single" data-testid="capture-stats">
+              <div
+                className="ct-stat-box ct-stat-box-single"
+                data-testid="capture-stats"
+              >
                 {inspectResult.shape && (
                   <dl className="ct-meta ct-meta-grid">
                     <div>
                       <dt>Shape</dt>
                       <dd>
-                        {inspectResult.shape.seq_len} ×{" "}
-                        {inspectResult.shape.width}
+                        {inspectResult.shape.seq_len} × {inspectResult.shape.width}
                       </dd>
                     </div>
                     {inspectResult.capture && (

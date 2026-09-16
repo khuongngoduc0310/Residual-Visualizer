@@ -1,0 +1,959 @@
+{
+  "graph": {
+    "nodes": [
+      {
+        "key": "token_embeddings",
+        "label": "Token embeddings",
+        "kind": "component",
+        "family": "components",
+        "explanation": "The embedding lookup for every prompt token, before any position information is added. Summed with the position embeddings it forms the residual stream input.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": false,
+        "vocab_contributable": false,
+        "block_index": null,
+        "stage": null,
+        "width_source": "model",
+        "trace_index": 0,
+        "trace_count": 29,
+        "prev_key": null,
+        "next_key": "position_embeddings"
+      },
+      {
+        "key": "position_embeddings",
+        "label": "Position embeddings",
+        "kind": "component",
+        "family": "components",
+        "explanation": "The learned embedding for each token position, identical for every prompt at that index. Summed with the token embeddings it forms the residual stream input.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": false,
+        "vocab_contributable": false,
+        "block_index": null,
+        "stage": null,
+        "width_source": "model",
+        "trace_index": 1,
+        "trace_count": 29,
+        "prev_key": "token_embeddings",
+        "next_key": "embedding"
+      },
+      {
+        "key": "embedding",
+        "label": "Residual stream \u00b7 input",
+        "kind": "stream",
+        "family": "stream_raw",
+        "explanation": "Token plus position embeddings: the residual stream as it enters the first transformer block. Its attention branch reads a normalized copy of this value.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": true,
+        "vocab_contributable": false,
+        "block_index": null,
+        "stage": null,
+        "width_source": "model",
+        "trace_index": 2,
+        "trace_count": 29,
+        "prev_key": "position_embeddings",
+        "next_key": "blocks.0.attention_input_norm"
+      },
+      {
+        "key": "blocks.0.attention_input_norm",
+        "label": "Block 1 - Layer norm - attention input",
+        "kind": "ln",
+        "family": "norm",
+        "explanation": "The normalized copy of the residual stream read by causal attention. The raw incoming stream bypasses this branch and is preserved for the residual addition.",
+        "normalized": true,
+        "feature_axis": true,
+        "deembeddable": false,
+        "vocab_contributable": false,
+        "block_index": 0,
+        "stage": "attention_input_norm",
+        "width_source": "model",
+        "trace_index": 3,
+        "trace_count": 29,
+        "prev_key": "embedding",
+        "next_key": "blocks.0.attention_pattern"
+      },
+      {
+        "key": "blocks.0.attention_pattern",
+        "label": "Block 1 - Causal attention pattern",
+        "kind": "pattern",
+        "family": "pattern",
+        "explanation": "Attention weights computed from the normalized attention input and averaged over heads. Each query row sums to about one; future key columns are masked by causality.",
+        "normalized": false,
+        "feature_axis": false,
+        "deembeddable": false,
+        "vocab_contributable": false,
+        "block_index": 0,
+        "stage": "attention_pattern",
+        "width_source": "none",
+        "trace_index": 4,
+        "trace_count": 29,
+        "prev_key": "blocks.0.attention_input_norm",
+        "next_key": "blocks.0.attention_update"
+      },
+      {
+        "key": "blocks.0.attention_update",
+        "label": "Block 1 - Attention output \u2192 residual",
+        "kind": "update",
+        "family": "updates",
+        "explanation": "The value causal attention computes from its normalized input. Adding it to the raw incoming stream produces this block's post-attention residual.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": false,
+        "vocab_contributable": true,
+        "block_index": 0,
+        "stage": "attention_update",
+        "width_source": "model",
+        "trace_index": 5,
+        "trace_count": 29,
+        "prev_key": "blocks.0.attention_pattern",
+        "next_key": "blocks.0.attention_residual"
+      },
+      {
+        "key": "blocks.0.attention_residual",
+        "label": "Block 1 - Residual stream \u00b7 after attention",
+        "kind": "stream",
+        "family": "stream_raw",
+        "explanation": "The residual stream after the attention update is added back to the block input. Feature magnitudes here combine the incoming stream with what attention just wrote.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": true,
+        "vocab_contributable": false,
+        "block_index": 0,
+        "stage": "attention_residual",
+        "width_source": "model",
+        "trace_index": 6,
+        "trace_count": 29,
+        "prev_key": "blocks.0.attention_update",
+        "next_key": "blocks.0.ffn_input_norm"
+      },
+      {
+        "key": "blocks.0.ffn_input_norm",
+        "label": "Block 1 - Layer norm - FFN input",
+        "kind": "ln",
+        "family": "norm",
+        "explanation": "The normalized copy of the post-attention residual read by the feed-forward network. The raw residual bypasses this branch and is preserved for the next residual addition.",
+        "normalized": true,
+        "feature_axis": true,
+        "deembeddable": false,
+        "vocab_contributable": false,
+        "block_index": 0,
+        "stage": "ffn_input_norm",
+        "width_source": "model",
+        "trace_index": 7,
+        "trace_count": 29,
+        "prev_key": "blocks.0.attention_residual",
+        "next_key": "blocks.0.ffn_hidden"
+      },
+      {
+        "key": "blocks.0.ffn_hidden",
+        "label": "Block 1 - FFN hidden (ReLU)",
+        "kind": "hidden",
+        "family": "hidden",
+        "explanation": "The raw ReLU hidden activation of the feed-forward network. Values are non-negative; zero marks a dead neuron for that token.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": false,
+        "vocab_contributable": false,
+        "block_index": 0,
+        "stage": "ffn_hidden",
+        "width_source": "ffn",
+        "trace_index": 8,
+        "trace_count": 29,
+        "prev_key": "blocks.0.ffn_input_norm",
+        "next_key": "blocks.0.ffn_update"
+      },
+      {
+        "key": "blocks.0.ffn_update",
+        "label": "Block 1 - FFN output \u2192 residual",
+        "kind": "update",
+        "family": "updates",
+        "explanation": "The value the feed-forward network writes into the residual stream. Adding this to the raw post-attention residual produces the residual stream after the FFN.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": false,
+        "vocab_contributable": true,
+        "block_index": 0,
+        "stage": "ffn_update",
+        "width_source": "model",
+        "trace_index": 9,
+        "trace_count": 29,
+        "prev_key": "blocks.0.ffn_hidden",
+        "next_key": "blocks.0.ffn_residual"
+      },
+      {
+        "key": "blocks.0.ffn_residual",
+        "label": "Block 1 - Residual stream \u00b7 after FFN",
+        "kind": "stream",
+        "family": "stream_raw",
+        "explanation": "The raw post-attention residual plus the FFN update. This is the transformer block output; it flows into the next block or, after the final block, the readout normalization.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": true,
+        "vocab_contributable": false,
+        "block_index": 0,
+        "stage": "ffn_residual",
+        "width_source": "model",
+        "trace_index": 10,
+        "trace_count": 29,
+        "prev_key": "blocks.0.ffn_update",
+        "next_key": "blocks.1.attention_input_norm"
+      },
+      {
+        "key": "blocks.1.attention_input_norm",
+        "label": "Block 2 - Layer norm - attention input",
+        "kind": "ln",
+        "family": "norm",
+        "explanation": "The normalized copy of the residual stream read by causal attention. The raw incoming stream bypasses this branch and is preserved for the residual addition.",
+        "normalized": true,
+        "feature_axis": true,
+        "deembeddable": false,
+        "vocab_contributable": false,
+        "block_index": 1,
+        "stage": "attention_input_norm",
+        "width_source": "model",
+        "trace_index": 11,
+        "trace_count": 29,
+        "prev_key": "blocks.0.ffn_residual",
+        "next_key": "blocks.1.attention_pattern"
+      },
+      {
+        "key": "blocks.1.attention_pattern",
+        "label": "Block 2 - Causal attention pattern",
+        "kind": "pattern",
+        "family": "pattern",
+        "explanation": "Attention weights computed from the normalized attention input and averaged over heads. Each query row sums to about one; future key columns are masked by causality.",
+        "normalized": false,
+        "feature_axis": false,
+        "deembeddable": false,
+        "vocab_contributable": false,
+        "block_index": 1,
+        "stage": "attention_pattern",
+        "width_source": "none",
+        "trace_index": 12,
+        "trace_count": 29,
+        "prev_key": "blocks.1.attention_input_norm",
+        "next_key": "blocks.1.attention_update"
+      },
+      {
+        "key": "blocks.1.attention_update",
+        "label": "Block 2 - Attention output \u2192 residual",
+        "kind": "update",
+        "family": "updates",
+        "explanation": "The value causal attention computes from its normalized input. Adding it to the raw incoming stream produces this block's post-attention residual.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": false,
+        "vocab_contributable": true,
+        "block_index": 1,
+        "stage": "attention_update",
+        "width_source": "model",
+        "trace_index": 13,
+        "trace_count": 29,
+        "prev_key": "blocks.1.attention_pattern",
+        "next_key": "blocks.1.attention_residual"
+      },
+      {
+        "key": "blocks.1.attention_residual",
+        "label": "Block 2 - Residual stream \u00b7 after attention",
+        "kind": "stream",
+        "family": "stream_raw",
+        "explanation": "The residual stream after the attention update is added back to the block input. Feature magnitudes here combine the incoming stream with what attention just wrote.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": true,
+        "vocab_contributable": false,
+        "block_index": 1,
+        "stage": "attention_residual",
+        "width_source": "model",
+        "trace_index": 14,
+        "trace_count": 29,
+        "prev_key": "blocks.1.attention_update",
+        "next_key": "blocks.1.ffn_input_norm"
+      },
+      {
+        "key": "blocks.1.ffn_input_norm",
+        "label": "Block 2 - Layer norm - FFN input",
+        "kind": "ln",
+        "family": "norm",
+        "explanation": "The normalized copy of the post-attention residual read by the feed-forward network. The raw residual bypasses this branch and is preserved for the next residual addition.",
+        "normalized": true,
+        "feature_axis": true,
+        "deembeddable": false,
+        "vocab_contributable": false,
+        "block_index": 1,
+        "stage": "ffn_input_norm",
+        "width_source": "model",
+        "trace_index": 15,
+        "trace_count": 29,
+        "prev_key": "blocks.1.attention_residual",
+        "next_key": "blocks.1.ffn_hidden"
+      },
+      {
+        "key": "blocks.1.ffn_hidden",
+        "label": "Block 2 - FFN hidden (ReLU)",
+        "kind": "hidden",
+        "family": "hidden",
+        "explanation": "The raw ReLU hidden activation of the feed-forward network. Values are non-negative; zero marks a dead neuron for that token.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": false,
+        "vocab_contributable": false,
+        "block_index": 1,
+        "stage": "ffn_hidden",
+        "width_source": "ffn",
+        "trace_index": 16,
+        "trace_count": 29,
+        "prev_key": "blocks.1.ffn_input_norm",
+        "next_key": "blocks.1.ffn_update"
+      },
+      {
+        "key": "blocks.1.ffn_update",
+        "label": "Block 2 - FFN output \u2192 residual",
+        "kind": "update",
+        "family": "updates",
+        "explanation": "The value the feed-forward network writes into the residual stream. Adding this to the raw post-attention residual produces the residual stream after the FFN.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": false,
+        "vocab_contributable": true,
+        "block_index": 1,
+        "stage": "ffn_update",
+        "width_source": "model",
+        "trace_index": 17,
+        "trace_count": 29,
+        "prev_key": "blocks.1.ffn_hidden",
+        "next_key": "blocks.1.ffn_residual"
+      },
+      {
+        "key": "blocks.1.ffn_residual",
+        "label": "Block 2 - Residual stream \u00b7 after FFN",
+        "kind": "stream",
+        "family": "stream_raw",
+        "explanation": "The raw post-attention residual plus the FFN update. This is the transformer block output; it flows into the next block or, after the final block, the readout normalization.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": true,
+        "vocab_contributable": false,
+        "block_index": 1,
+        "stage": "ffn_residual",
+        "width_source": "model",
+        "trace_index": 18,
+        "trace_count": 29,
+        "prev_key": "blocks.1.ffn_update",
+        "next_key": "blocks.2.attention_input_norm"
+      },
+      {
+        "key": "blocks.2.attention_input_norm",
+        "label": "Block 3 - Layer norm - attention input",
+        "kind": "ln",
+        "family": "norm",
+        "explanation": "The normalized copy of the residual stream read by causal attention. The raw incoming stream bypasses this branch and is preserved for the residual addition.",
+        "normalized": true,
+        "feature_axis": true,
+        "deembeddable": false,
+        "vocab_contributable": false,
+        "block_index": 2,
+        "stage": "attention_input_norm",
+        "width_source": "model",
+        "trace_index": 19,
+        "trace_count": 29,
+        "prev_key": "blocks.1.ffn_residual",
+        "next_key": "blocks.2.attention_pattern"
+      },
+      {
+        "key": "blocks.2.attention_pattern",
+        "label": "Block 3 - Causal attention pattern",
+        "kind": "pattern",
+        "family": "pattern",
+        "explanation": "Attention weights computed from the normalized attention input and averaged over heads. Each query row sums to about one; future key columns are masked by causality.",
+        "normalized": false,
+        "feature_axis": false,
+        "deembeddable": false,
+        "vocab_contributable": false,
+        "block_index": 2,
+        "stage": "attention_pattern",
+        "width_source": "none",
+        "trace_index": 20,
+        "trace_count": 29,
+        "prev_key": "blocks.2.attention_input_norm",
+        "next_key": "blocks.2.attention_update"
+      },
+      {
+        "key": "blocks.2.attention_update",
+        "label": "Block 3 - Attention output \u2192 residual",
+        "kind": "update",
+        "family": "updates",
+        "explanation": "The value causal attention computes from its normalized input. Adding it to the raw incoming stream produces this block's post-attention residual.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": false,
+        "vocab_contributable": true,
+        "block_index": 2,
+        "stage": "attention_update",
+        "width_source": "model",
+        "trace_index": 21,
+        "trace_count": 29,
+        "prev_key": "blocks.2.attention_pattern",
+        "next_key": "blocks.2.attention_residual"
+      },
+      {
+        "key": "blocks.2.attention_residual",
+        "label": "Block 3 - Residual stream \u00b7 after attention",
+        "kind": "stream",
+        "family": "stream_raw",
+        "explanation": "The residual stream after the attention update is added back to the block input. Feature magnitudes here combine the incoming stream with what attention just wrote.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": true,
+        "vocab_contributable": false,
+        "block_index": 2,
+        "stage": "attention_residual",
+        "width_source": "model",
+        "trace_index": 22,
+        "trace_count": 29,
+        "prev_key": "blocks.2.attention_update",
+        "next_key": "blocks.2.ffn_input_norm"
+      },
+      {
+        "key": "blocks.2.ffn_input_norm",
+        "label": "Block 3 - Layer norm - FFN input",
+        "kind": "ln",
+        "family": "norm",
+        "explanation": "The normalized copy of the post-attention residual read by the feed-forward network. The raw residual bypasses this branch and is preserved for the next residual addition.",
+        "normalized": true,
+        "feature_axis": true,
+        "deembeddable": false,
+        "vocab_contributable": false,
+        "block_index": 2,
+        "stage": "ffn_input_norm",
+        "width_source": "model",
+        "trace_index": 23,
+        "trace_count": 29,
+        "prev_key": "blocks.2.attention_residual",
+        "next_key": "blocks.2.ffn_hidden"
+      },
+      {
+        "key": "blocks.2.ffn_hidden",
+        "label": "Block 3 - FFN hidden (ReLU)",
+        "kind": "hidden",
+        "family": "hidden",
+        "explanation": "The raw ReLU hidden activation of the feed-forward network. Values are non-negative; zero marks a dead neuron for that token.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": false,
+        "vocab_contributable": false,
+        "block_index": 2,
+        "stage": "ffn_hidden",
+        "width_source": "ffn",
+        "trace_index": 24,
+        "trace_count": 29,
+        "prev_key": "blocks.2.ffn_input_norm",
+        "next_key": "blocks.2.ffn_update"
+      },
+      {
+        "key": "blocks.2.ffn_update",
+        "label": "Block 3 - FFN output \u2192 residual",
+        "kind": "update",
+        "family": "updates",
+        "explanation": "The value the feed-forward network writes into the residual stream. Adding this to the raw post-attention residual produces the residual stream after the FFN.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": false,
+        "vocab_contributable": true,
+        "block_index": 2,
+        "stage": "ffn_update",
+        "width_source": "model",
+        "trace_index": 25,
+        "trace_count": 29,
+        "prev_key": "blocks.2.ffn_hidden",
+        "next_key": "blocks.2.ffn_residual"
+      },
+      {
+        "key": "blocks.2.ffn_residual",
+        "label": "Block 3 - Residual stream \u00b7 after FFN",
+        "kind": "stream",
+        "family": "stream_raw",
+        "explanation": "The raw post-attention residual plus the FFN update. This is the transformer block output; it flows into the next block or, after the final block, the readout normalization.",
+        "normalized": false,
+        "feature_axis": true,
+        "deembeddable": true,
+        "vocab_contributable": false,
+        "block_index": 2,
+        "stage": "ffn_residual",
+        "width_source": "model",
+        "trace_index": 26,
+        "trace_count": 29,
+        "prev_key": "blocks.2.ffn_update",
+        "next_key": "output_norm"
+      },
+      {
+        "key": "output_norm",
+        "label": "Layer norm - readout input",
+        "kind": "ln",
+        "family": "norm",
+        "explanation": "A final model-level normalization of the raw block output. The vocabulary projection reads this value to predict the next token.",
+        "normalized": true,
+        "feature_axis": true,
+        "deembeddable": true,
+        "vocab_contributable": false,
+        "block_index": null,
+        "stage": null,
+        "width_source": "model",
+        "trace_index": 27,
+        "trace_count": 29,
+        "prev_key": "blocks.2.ffn_residual",
+        "next_key": "readout"
+      },
+      {
+        "key": "readout",
+        "label": "Readout \u00b7 next-token probabilities",
+        "kind": "readout",
+        "family": "readout",
+        "explanation": "For the selected token position, the softmax distribution over the vocabulary induced by the final block output. The entropy strip shows how confident the model is at every token.",
+        "normalized": false,
+        "feature_axis": false,
+        "deembeddable": false,
+        "vocab_contributable": false,
+        "block_index": null,
+        "stage": null,
+        "width_source": "none",
+        "trace_index": 28,
+        "trace_count": 29,
+        "prev_key": "output_norm",
+        "next_key": null
+      }
+    ],
+    "spine": [
+      "embedding",
+      "blocks.0.attention_residual",
+      "blocks.0.ffn_residual",
+      "blocks.1.attention_residual",
+      "blocks.1.ffn_residual",
+      "blocks.2.attention_residual",
+      "blocks.2.ffn_residual",
+      "output_norm"
+    ],
+    "spine_links": [
+      "attention-add",
+      "ffn-add",
+      "attention-add",
+      "ffn-add",
+      "attention-add",
+      "ffn-add",
+      "layer-norm",
+      "readout"
+    ],
+    "branches": [
+      {
+        "key": "block_0_attention",
+        "label": "Block 1 causal multi-head attention",
+        "reads": "embedding",
+        "adds_before": "blocks.0.attention_residual",
+        "path": [
+          "blocks.0.attention_input_norm",
+          "blocks.0.attention_update"
+        ],
+        "observables": [
+          "blocks.0.attention_pattern"
+        ],
+        "kind": "attention",
+        "block_index": 0,
+        "side": "above"
+      },
+      {
+        "key": "block_0_ffn",
+        "label": "Block 1 feed-forward network",
+        "reads": "blocks.0.attention_residual",
+        "adds_before": "blocks.0.ffn_residual",
+        "path": [
+          "blocks.0.ffn_input_norm",
+          "blocks.0.ffn_hidden",
+          "blocks.0.ffn_update"
+        ],
+        "observables": [],
+        "kind": "ffn",
+        "block_index": 0,
+        "side": "below"
+      },
+      {
+        "key": "block_1_attention",
+        "label": "Block 2 causal multi-head attention",
+        "reads": "blocks.0.ffn_residual",
+        "adds_before": "blocks.1.attention_residual",
+        "path": [
+          "blocks.1.attention_input_norm",
+          "blocks.1.attention_update"
+        ],
+        "observables": [
+          "blocks.1.attention_pattern"
+        ],
+        "kind": "attention",
+        "block_index": 1,
+        "side": "above"
+      },
+      {
+        "key": "block_1_ffn",
+        "label": "Block 2 feed-forward network",
+        "reads": "blocks.1.attention_residual",
+        "adds_before": "blocks.1.ffn_residual",
+        "path": [
+          "blocks.1.ffn_input_norm",
+          "blocks.1.ffn_hidden",
+          "blocks.1.ffn_update"
+        ],
+        "observables": [],
+        "kind": "ffn",
+        "block_index": 1,
+        "side": "below"
+      },
+      {
+        "key": "block_2_attention",
+        "label": "Block 3 causal multi-head attention",
+        "reads": "blocks.1.ffn_residual",
+        "adds_before": "blocks.2.attention_residual",
+        "path": [
+          "blocks.2.attention_input_norm",
+          "blocks.2.attention_update"
+        ],
+        "observables": [
+          "blocks.2.attention_pattern"
+        ],
+        "kind": "attention",
+        "block_index": 2,
+        "side": "above"
+      },
+      {
+        "key": "block_2_ffn",
+        "label": "Block 3 feed-forward network",
+        "reads": "blocks.2.attention_residual",
+        "adds_before": "blocks.2.ffn_residual",
+        "path": [
+          "blocks.2.ffn_input_norm",
+          "blocks.2.ffn_hidden",
+          "blocks.2.ffn_update"
+        ],
+        "observables": [],
+        "kind": "ffn",
+        "block_index": 2,
+        "side": "below"
+      }
+    ],
+    "components": [
+      "token_embeddings",
+      "position_embeddings"
+    ],
+    "trace": [
+      "token_embeddings",
+      "position_embeddings",
+      "embedding",
+      "blocks.0.attention_input_norm",
+      "blocks.0.attention_pattern",
+      "blocks.0.attention_update",
+      "blocks.0.attention_residual",
+      "blocks.0.ffn_input_norm",
+      "blocks.0.ffn_hidden",
+      "blocks.0.ffn_update",
+      "blocks.0.ffn_residual",
+      "blocks.1.attention_input_norm",
+      "blocks.1.attention_pattern",
+      "blocks.1.attention_update",
+      "blocks.1.attention_residual",
+      "blocks.1.ffn_input_norm",
+      "blocks.1.ffn_hidden",
+      "blocks.1.ffn_update",
+      "blocks.1.ffn_residual",
+      "blocks.2.attention_input_norm",
+      "blocks.2.attention_pattern",
+      "blocks.2.attention_update",
+      "blocks.2.attention_residual",
+      "blocks.2.ffn_input_norm",
+      "blocks.2.ffn_hidden",
+      "blocks.2.ffn_update",
+      "blocks.2.ffn_residual",
+      "output_norm",
+      "readout"
+    ],
+    "default_node": "output_norm"
+  },
+  "locations": [
+    {
+      "key": "token_embeddings",
+      "label": "Token embeddings",
+      "kind": "component",
+      "family": "components"
+    },
+    {
+      "key": "position_embeddings",
+      "label": "Position embeddings",
+      "kind": "component",
+      "family": "components"
+    },
+    {
+      "key": "embedding",
+      "label": "Residual stream \u00b7 input",
+      "kind": "stream",
+      "family": "stream_raw"
+    },
+    {
+      "key": "blocks.0.attention_input_norm",
+      "label": "Block 1 - Layer norm - attention input",
+      "kind": "ln",
+      "family": "norm"
+    },
+    {
+      "key": "blocks.0.attention_pattern",
+      "label": "Block 1 - Causal attention pattern",
+      "kind": "pattern",
+      "family": "pattern"
+    },
+    {
+      "key": "blocks.0.attention_update",
+      "label": "Block 1 - Attention output \u2192 residual",
+      "kind": "update",
+      "family": "updates"
+    },
+    {
+      "key": "blocks.0.attention_residual",
+      "label": "Block 1 - Residual stream \u00b7 after attention",
+      "kind": "stream",
+      "family": "stream_raw"
+    },
+    {
+      "key": "blocks.0.ffn_input_norm",
+      "label": "Block 1 - Layer norm - FFN input",
+      "kind": "ln",
+      "family": "norm"
+    },
+    {
+      "key": "blocks.0.ffn_hidden",
+      "label": "Block 1 - FFN hidden (ReLU)",
+      "kind": "hidden",
+      "family": "hidden"
+    },
+    {
+      "key": "blocks.0.ffn_update",
+      "label": "Block 1 - FFN output \u2192 residual",
+      "kind": "update",
+      "family": "updates"
+    },
+    {
+      "key": "blocks.0.ffn_residual",
+      "label": "Block 1 - Residual stream \u00b7 after FFN",
+      "kind": "stream",
+      "family": "stream_raw"
+    },
+    {
+      "key": "blocks.1.attention_input_norm",
+      "label": "Block 2 - Layer norm - attention input",
+      "kind": "ln",
+      "family": "norm"
+    },
+    {
+      "key": "blocks.1.attention_pattern",
+      "label": "Block 2 - Causal attention pattern",
+      "kind": "pattern",
+      "family": "pattern"
+    },
+    {
+      "key": "blocks.1.attention_update",
+      "label": "Block 2 - Attention output \u2192 residual",
+      "kind": "update",
+      "family": "updates"
+    },
+    {
+      "key": "blocks.1.attention_residual",
+      "label": "Block 2 - Residual stream \u00b7 after attention",
+      "kind": "stream",
+      "family": "stream_raw"
+    },
+    {
+      "key": "blocks.1.ffn_input_norm",
+      "label": "Block 2 - Layer norm - FFN input",
+      "kind": "ln",
+      "family": "norm"
+    },
+    {
+      "key": "blocks.1.ffn_hidden",
+      "label": "Block 2 - FFN hidden (ReLU)",
+      "kind": "hidden",
+      "family": "hidden"
+    },
+    {
+      "key": "blocks.1.ffn_update",
+      "label": "Block 2 - FFN output \u2192 residual",
+      "kind": "update",
+      "family": "updates"
+    },
+    {
+      "key": "blocks.1.ffn_residual",
+      "label": "Block 2 - Residual stream \u00b7 after FFN",
+      "kind": "stream",
+      "family": "stream_raw"
+    },
+    {
+      "key": "blocks.2.attention_input_norm",
+      "label": "Block 3 - Layer norm - attention input",
+      "kind": "ln",
+      "family": "norm"
+    },
+    {
+      "key": "blocks.2.attention_pattern",
+      "label": "Block 3 - Causal attention pattern",
+      "kind": "pattern",
+      "family": "pattern"
+    },
+    {
+      "key": "blocks.2.attention_update",
+      "label": "Block 3 - Attention output \u2192 residual",
+      "kind": "update",
+      "family": "updates"
+    },
+    {
+      "key": "blocks.2.attention_residual",
+      "label": "Block 3 - Residual stream \u00b7 after attention",
+      "kind": "stream",
+      "family": "stream_raw"
+    },
+    {
+      "key": "blocks.2.ffn_input_norm",
+      "label": "Block 3 - Layer norm - FFN input",
+      "kind": "ln",
+      "family": "norm"
+    },
+    {
+      "key": "blocks.2.ffn_hidden",
+      "label": "Block 3 - FFN hidden (ReLU)",
+      "kind": "hidden",
+      "family": "hidden"
+    },
+    {
+      "key": "blocks.2.ffn_update",
+      "label": "Block 3 - FFN output \u2192 residual",
+      "kind": "update",
+      "family": "updates"
+    },
+    {
+      "key": "blocks.2.ffn_residual",
+      "label": "Block 3 - Residual stream \u00b7 after FFN",
+      "kind": "stream",
+      "family": "stream_raw"
+    },
+    {
+      "key": "output_norm",
+      "label": "Layer norm - readout input",
+      "kind": "ln",
+      "family": "norm"
+    },
+    {
+      "key": "readout",
+      "label": "Readout \u00b7 next-token probabilities",
+      "kind": "readout",
+      "family": "readout"
+    }
+  ],
+  "ablation_nodes": [
+    {
+      "key": "embedding",
+      "label": "Residual stream \u00b7 input",
+      "kind": "stream",
+      "family": "stream_raw"
+    },
+    {
+      "key": "blocks.0.attention_input_norm",
+      "label": "Block 1 - Layer norm - attention input",
+      "kind": "ln",
+      "family": "norm"
+    },
+    {
+      "key": "blocks.0.attention_residual",
+      "label": "Block 1 - Residual stream \u00b7 after attention",
+      "kind": "stream",
+      "family": "stream_raw"
+    },
+    {
+      "key": "blocks.0.ffn_input_norm",
+      "label": "Block 1 - Layer norm - FFN input",
+      "kind": "ln",
+      "family": "norm"
+    },
+    {
+      "key": "blocks.0.ffn_hidden",
+      "label": "Block 1 - FFN hidden (ReLU)",
+      "kind": "hidden",
+      "family": "hidden"
+    },
+    {
+      "key": "blocks.0.ffn_residual",
+      "label": "Block 1 - Residual stream \u00b7 after FFN",
+      "kind": "stream",
+      "family": "stream_raw"
+    },
+    {
+      "key": "blocks.1.attention_input_norm",
+      "label": "Block 2 - Layer norm - attention input",
+      "kind": "ln",
+      "family": "norm"
+    },
+    {
+      "key": "blocks.1.attention_residual",
+      "label": "Block 2 - Residual stream \u00b7 after attention",
+      "kind": "stream",
+      "family": "stream_raw"
+    },
+    {
+      "key": "blocks.1.ffn_input_norm",
+      "label": "Block 2 - Layer norm - FFN input",
+      "kind": "ln",
+      "family": "norm"
+    },
+    {
+      "key": "blocks.1.ffn_hidden",
+      "label": "Block 2 - FFN hidden (ReLU)",
+      "kind": "hidden",
+      "family": "hidden"
+    },
+    {
+      "key": "blocks.1.ffn_residual",
+      "label": "Block 2 - Residual stream \u00b7 after FFN",
+      "kind": "stream",
+      "family": "stream_raw"
+    },
+    {
+      "key": "blocks.2.attention_input_norm",
+      "label": "Block 3 - Layer norm - attention input",
+      "kind": "ln",
+      "family": "norm"
+    },
+    {
+      "key": "blocks.2.attention_residual",
+      "label": "Block 3 - Residual stream \u00b7 after attention",
+      "kind": "stream",
+      "family": "stream_raw"
+    },
+    {
+      "key": "blocks.2.ffn_input_norm",
+      "label": "Block 3 - Layer norm - FFN input",
+      "kind": "ln",
+      "family": "norm"
+    },
+    {
+      "key": "blocks.2.ffn_hidden",
+      "label": "Block 3 - FFN hidden (ReLU)",
+      "kind": "hidden",
+      "family": "hidden"
+    },
+    {
+      "key": "blocks.2.ffn_residual",
+      "label": "Block 3 - Residual stream \u00b7 after FFN",
+      "kind": "stream",
+      "family": "stream_raw"
+    },
+    {
+      "key": "output_norm",
+      "label": "Layer norm - readout input",
+      "kind": "ln",
+      "family": "norm"
+    }
+  ]
+}

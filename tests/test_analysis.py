@@ -1,36 +1,18 @@
 import numpy as np
 import pytest
 import tensorflow as tf
+from support import VOCABULARY, write_checkpoint
 
 from analysis import AnalysisError, analyze_prompt, display_text
-from checkpoint import load_checkpoint, save_checkpoint
+from checkpoint import load_checkpoint
 from inspection import CAPTURED_KEYS, capture_locations
-from model import ModelConfig, build_model
 from preprocess import PADDING_TOKEN_ID
-
-
-VOCABULARY = ["", "[UNK]", "hello", ",", "world", "!"]
-
-
-def tiny_config():
-    return ModelConfig(
-        vocab_size=len(VOCABULARY),
-        max_len=6,
-        embedding_dim=8,
-        num_heads=2,
-        key_dim=4,
-        feed_forward_dim=8,
-        dropout_rate=0.0,
-    )
 
 
 @pytest.fixture(scope="module")
 def loaded_checkpoint(tmp_path_factory):
     directory = tmp_path_factory.mktemp("checkpoint")
-    tf.keras.utils.set_random_seed(9)
-    config = tiny_config()
-    model = build_model(config)
-    save_checkpoint(directory, model, VOCABULARY, config)
+    write_checkpoint(directory, seed=9)
     return load_checkpoint(directory)
 
 

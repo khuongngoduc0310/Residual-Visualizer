@@ -408,6 +408,59 @@ checkpoint produced by another runtime is rejected because weight
 compatibility is not guaranteed. The format version is incremented when this
 runtime or architecture contract changes; pre-format-3 checkpoints are rejected.
 
+## Project Layout
+
+The Python modules follow one direction: model and domain logic never import the
+UI, HTTP, or process-startup layers.
+
+| Module | Responsibility |
+| --- | --- |
+| `model.py` | The three-block pre-norm causal LM and its config. |
+| `preprocess.py` | Text normalization and the shared tokenizer rules. |
+| `analysis.py` | Tokenize a prompt, run the model, expose next-token rows. |
+| `checkpoint.py` | Save, load, and validate the versioned checkpoint folder. |
+| `inspection.py` | Stream-node catalog, ablation specs, and tensor capture. |
+| `charts.py` | Plotly figure builders. |
+| `plotly_json.py` | Plotly figure to JSON-safe payload conversion. |
+| `inspection_payload.py` | The inspection payload key set shared with the frontend. |
+| `graph_view.py` | Static graph, node, and options payloads. |
+| `readout_view.py` | Next-token readout rows, comparisons, and payload. |
+| `deembed_view.py` | Residual-state projection through the output matrix. |
+| `contribution_view.py` | Direct logit attribution for attention and FFN updates. |
+| `inspection_views.py` | Assembles the inspection endpoint payload. |
+| `engine.py` | Owns the loaded model and the inspection session. |
+| `server.py` | Gradio endpoints and the FastAPI/static app. |
+| `app.py` | Local entrypoint. |
+
+`frontend/src` mirrors this split: `api/` is the transport, `components/` is
+presentational, and `App.tsx` composes the panels.
+
+The payload fixtures in `tests/fixtures/` are generated from the Python builders
+and consumed by a frontend test, so a payload change that is not mirrored in
+`frontend/src/types.ts` fails on both sides. Regenerate them after an
+intentional payload change:
+
+```powershell
+.\.venv\Scripts\python.exe tests\generate_fixtures.py
+```
+
+### Development Checks
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest       # Python suite
+.\.venv\Scripts\python.exe -m ruff check . # Python lint
+.\.venv\Scripts\python.exe -m ruff format .# Python format
+```
+
+```powershell
+cd frontend
+npm test           # frontend suite
+npm run typecheck  # TypeScript
+npm run lint       # ESLint
+npm run format     # Prettier
+npm run build      # production bundle
+```
+
 ## Troubleshooting
 
 - **Python or package version mismatch:** create a fresh 64-bit Python 3.13

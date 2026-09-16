@@ -5,7 +5,6 @@ from typing import Any, Callable, Dict, Mapping
 import tensorflow as tf
 from tensorflow.keras import layers, losses, models
 
-
 ARCHITECTURE_NAME = "three_block_pre_norm_causal_lm"
 NUM_TRANSFORMER_BLOCKS = 3
 FEED_FORWARD_ACTIVITY_L1 = 1e-5
@@ -57,10 +56,7 @@ class ModelConfig:
             raise ValueError(
                 f"num_blocks must be {NUM_TRANSFORMER_BLOCKS} for this architecture"
             )
-        if (
-            not math.isfinite(self.layer_norm_epsilon)
-            or self.layer_norm_epsilon <= 0
-        ):
+        if not math.isfinite(self.layer_norm_epsilon) or self.layer_norm_epsilon <= 0:
             raise ValueError("layer_norm_epsilon must be positive")
         if self.feed_forward_activity_l1 != FEED_FORWARD_ACTIVITY_L1:
             raise ValueError(
@@ -211,17 +207,13 @@ class TransformerBlock(layers.Layer):
         )
 
         feed_forward_hidden = self.ffn_1(normalized_ffn_input)
-        feed_forward_hidden = apply_intervention(
-            "ffn_hidden", feed_forward_hidden
-        )
+        feed_forward_hidden = apply_intervention("ffn_hidden", feed_forward_hidden)
         if token_mask is not None and self.feed_forward_activity_l1:
             mask = tf.cast(token_mask[..., None], feed_forward_hidden.dtype)
             batch_size = tf.cast(tf.shape(feed_forward_hidden)[0], tf.float32)
             activity = tf.cast(tf.abs(feed_forward_hidden) * mask, tf.float32)
             self.add_loss(
-                self.feed_forward_activity_l1
-                * tf.reduce_sum(activity)
-                / batch_size
+                self.feed_forward_activity_l1 * tf.reduce_sum(activity) / batch_size
             )
         feed_forward_update = self.ffn_2(feed_forward_hidden)
         feed_forward_update = self.dropout_2(

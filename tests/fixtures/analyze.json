@@ -1,0 +1,56 @@
+{
+  "ok": true,
+  "status": "Analysis complete for 3 processed token(s).",
+  "token_count": 3,
+  "max_len": 6,
+  "unknown_count": 0,
+  "tokens": [
+    {
+      "position": 0,
+      "text": "hello",
+      "token_id": 2
+    },
+    {
+      "position": 1,
+      "text": ",",
+      "token_id": 3
+    },
+    {
+      "position": 2,
+      "text": "world",
+      "token_id": 4
+    }
+  ],
+  "next_tokens": [
+    {
+      "rank": 1,
+      "text": "hello",
+      "token_id": 2,
+      "probability": 0.36422276496887207
+    },
+    {
+      "rank": 2,
+      "text": "!",
+      "token_id": 5,
+      "probability": 0.22882460057735443
+    },
+    {
+      "rank": 3,
+      "text": ",",
+      "token_id": 3,
+      "probability": 0.13813340663909912
+    },
+    {
+      "rank": 4,
+      "text": "world",
+      "token_id": 4,
+      "probability": 0.11262422055006027
+    },
+    {
+      "rank": 5,
+      "text": "[UNK]",
+      "token_id": 1,
+      "probability": 0.09325850754976273
+    }
+  ]
+}

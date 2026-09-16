@@ -22,16 +22,11 @@ describe("PlotlyFigure", () => {
     });
 
     render(
-      <PlotlyFigure
-        figure={{ data: [{}], layout: {} }}
-        data-testid="failed-plot"
-      />,
+      <PlotlyFigure figure={{ data: [{}], layout: {} }} data-testid="failed-plot" />,
     );
 
     expect(screen.getByTestId("failed-plot")).toBeInTheDocument();
-    expect(
-      await screen.findByText("Chart could not be rendered."),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Chart could not be rendered.")).toBeInTheDocument();
     await waitFor(() =>
       expect(plotly.react).toHaveBeenCalledWith(
         expect.any(HTMLElement),
@@ -40,10 +35,7 @@ describe("PlotlyFigure", () => {
         expect.objectContaining({ responsive: true }),
       ),
     );
-    expect(warn).toHaveBeenCalledWith(
-      "Plotly render failed",
-      expect.any(Error),
-    );
+    expect(warn).toHaveBeenCalledWith("Plotly render failed", expect.any(Error));
     warn.mockRestore();
   });
 });

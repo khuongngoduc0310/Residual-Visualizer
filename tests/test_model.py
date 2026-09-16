@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 import tensorflow as tf
+from support import tiny_config as _tiny_config
 
 import model as model_module
 from model import (
@@ -13,17 +14,8 @@ from model import (
 
 
 def tiny_config(**changes):
-    values = {
-        "vocab_size": 7,
-        "max_len": 6,
-        "embedding_dim": 8,
-        "num_heads": 2,
-        "key_dim": 4,
-        "feed_forward_dim": 8,
-        "dropout_rate": 0.0,
-    }
-    values.update(changes)
-    return ModelConfig(**values)
+    """Model-layer config with the wider vocabulary these tests assert on."""
+    return _tiny_config(vocab_size=7, **changes)
 
 
 def test_model_import_has_no_prebuilt_model():
@@ -114,12 +106,8 @@ def test_block_implements_pre_norm_equations_with_final_output_norm():
         )
         expected_hidden = block.ffn_1(expected_ffn_input)
         expected_ffn_update = block.ffn_2(expected_hidden)
-        np.testing.assert_allclose(
-            steps["ffn_hidden"], expected_hidden, atol=1e-6
-        )
-        np.testing.assert_allclose(
-            steps["ffn_update"], expected_ffn_update, atol=1e-6
-        )
+        np.testing.assert_allclose(steps["ffn_hidden"], expected_hidden, atol=1e-6)
+        np.testing.assert_allclose(steps["ffn_update"], expected_ffn_update, atol=1e-6)
         np.testing.assert_allclose(
             steps["ffn_residual"],
             steps["attention_residual"] + steps["ffn_update"],
@@ -140,9 +128,7 @@ def test_trailing_right_padding_does_not_change_real_token_outputs():
     language_model = build_model(tiny_config())
 
     short = language_model(tf.constant([[2, 3, 4]]), training=False).numpy()
-    padded = language_model(
-        tf.constant([[2, 3, 4, 0, 0]]), training=False
-    ).numpy()
+    padded = language_model(tf.constant([[2, 3, 4, 0, 0]]), training=False).numpy()
 
     np.testing.assert_allclose(short, padded[:, :3, :], rtol=1e-5, atol=1e-6)
 
@@ -172,7 +158,5 @@ def test_activity_l1_excludes_right_padding_and_matches_hidden_values():
     np.testing.assert_allclose(actual_losses, expected_losses, atol=1e-7)
 
     language_model(tf.constant([[2, 3], [4, 5]]), training=False)
-    unpadded_losses = np.asarray(
-        [float(loss) for loss in language_model.losses]
-    )
+    unpadded_losses = np.asarray([float(loss) for loss in language_model.losses])
     np.testing.assert_allclose(actual_losses, unpadded_losses, atol=1e-7)

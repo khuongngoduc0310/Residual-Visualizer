@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "status": "Ablation produced no measurable change: blocks.0.ffn_hidden dimension 0 was inactive at the ablated token(s).",
+  "ablation": {
+    "node_key": "blocks.0.ffn_hidden",
+    "node_label": "Block 1 - FFN hidden (ReLU)",
+    "dims": [
+      0
+    ],
+    "mode": "zero",
+    "scope": "all",
+    "position": null,
+    "baseline_values": [
+      0.0
+    ]
+  },
+  "strongest_position": 0
+}

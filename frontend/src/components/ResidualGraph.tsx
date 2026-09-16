@@ -126,10 +126,7 @@ export function ResidualGraph({
   );
   const lastChipX = spineXs[spineXs.length - 1] ?? SPINE_X0;
   const readoutCx = lastChipX + SPINE_STEP;
-  const viewWidth = Math.max(
-    MIN_VIEW_WIDTH,
-    readoutCx + READOUT_W / 2 + 5,
-  );
+  const viewWidth = Math.max(MIN_VIEW_WIDTH, readoutCx + READOUT_W / 2 + 5);
 
   useEffect(() => {
     const scrollContainer = scrollRef.current;
@@ -144,16 +141,12 @@ export function ResidualGraph({
       if (!selectedNode || !svg || !Number.isFinite(centerX)) return;
 
       const renderedWidth = svg.getBoundingClientRect().width || viewWidth;
-      const maxScrollLeft = Math.max(
-        0,
-        renderedWidth - scrollContainer.clientWidth,
-      );
+      const maxScrollLeft = Math.max(0, renderedWidth - scrollContainer.clientWidth);
       const targetLeft = Math.min(
         maxScrollLeft,
         Math.max(
           0,
-          centerX * (renderedWidth / viewWidth) -
-            scrollContainer.clientWidth / 2,
+          centerX * (renderedWidth / viewWidth) - scrollContainer.clientWidth / 2,
         ),
       );
       if (typeof scrollContainer.scrollTo === "function") {
@@ -202,15 +195,13 @@ export function ResidualGraph({
       ? "#1d4ed8"
       : hovered
         ? "#334155"
-        : KIND_STROKE[node.kind] ?? "#cbd5e1";
+        : (KIND_STROKE[node.kind] ?? "#cbd5e1");
     return (
       <g
         key={key}
         role="button"
         aria-label={
-          displayLabel === node.label
-            ? node.label
-            : `${displayLabel}: ${node.label}`
+          displayLabel === node.label ? node.label : `${displayLabel}: ${node.label}`
         }
         tabIndex={selectable ? 0 : -1}
         data-node={key}
@@ -272,13 +263,7 @@ export function ResidualGraph({
     );
   }
 
-  function renderArrow(
-    x1: number,
-    y1: number,
-    x2: number,
-    y2: number,
-    key?: string,
-  ) {
+  function renderArrow(x1: number, y1: number, x2: number, y2: number, key?: string) {
     return (
       <line
         key={key}
@@ -546,30 +531,13 @@ export function ResidualGraph({
             )}
           </g>
         ))}
-        {isAbove ? (
-          renderArrow(
-            readX,
-            SPINE_Y - CHIP_H / 2,
-            pathX,
-            firstPathY + 20,
-          )
-        ) : (
-          renderArrow(
-            readX,
-            SPINE_Y + CHIP_H / 2,
-            pathX,
-            firstPathY - 20,
-          )
-        )}
+        {isAbove
+          ? renderArrow(readX, SPINE_Y - CHIP_H / 2, pathX, firstPathY + 20)
+          : renderArrow(readX, SPINE_Y + CHIP_H / 2, pathX, firstPathY - 20)}
         {isAbove
           ? renderArrowLabel(readX - 10, 235, "reads", "end")
           : renderArrowLabel(readX - 10, 348, "reads", "end")}
-        {renderArrow(
-          pathX,
-          isAbove ? lastPathY + 20 : lastPathY - 20,
-          addX,
-          SPINE_Y,
-        )}
+        {renderArrow(pathX, isAbove ? lastPathY + 20 : lastPathY - 20, addX, SPINE_Y)}
         {isAbove
           ? renderArrowLabel(addX - 10, 246, "writes", "end")
           : renderArrowLabel(addX + 10, 335, "writes", "start")}
@@ -593,22 +561,12 @@ export function ResidualGraph({
     const readoutLeft = readoutCx - READOUT_W / 2;
     const arrowStart = lastChipX + CHIP_W / 2 + 2;
     const arrowEnd = readoutLeft - 3;
-    items.push(
-      renderArrow(
-        arrowStart,
-        SPINE_Y,
-        arrowEnd,
-        SPINE_Y,
-        "readout-arrow",
-      ),
-    );
+    items.push(renderArrow(arrowStart, SPINE_Y, arrowEnd, SPINE_Y, "readout-arrow"));
     items.push(
       renderOperationPill(
         graph.spine.length - 1,
         (arrowStart + arrowEnd) / 2 + 8,
-        linkKind(
-          graph.spine_links[graph.spine.length - 1] ?? "readout",
-        ),
+        linkKind(graph.spine_links[graph.spine.length - 1] ?? "readout"),
       ),
     );
     items.push(

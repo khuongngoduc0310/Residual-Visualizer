@@ -5,8 +5,7 @@ export class CtApiError extends Error {
   }
 }
 
-const GRADIO_BASE =
-  import.meta.env.VITE_GRADIO_BASE ?? "/gradio";
+const GRADIO_BASE = import.meta.env.VITE_GRADIO_BASE ?? "/gradio";
 
 function apiUrl(apiName: string): string {
   return `${GRADIO_BASE}/gradio_api/call/${apiName}`;
@@ -76,9 +75,10 @@ export async function callApi<Result>(
     const message =
       typeof detail === "string"
         ? detail
-        : detail && typeof detail === "object" &&
+        : detail &&
+            typeof detail === "object" &&
             typeof (detail as { message?: unknown }).message === "string"
-          ? ((detail as { message: string }).message)
+          ? (detail as { message: string }).message
           : `The request was rejected by the server (${postResponse.status}).`;
     throw new CtApiError(message);
   }

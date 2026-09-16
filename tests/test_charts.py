@@ -13,7 +13,6 @@ from charts import (
     render_vocab_contributions,
 )
 
-
 VALUES = np.array([[3.0, 4.0], [-2.0, 1.0], [0.5, -0.5]])
 LABELS = ["0: repeat", "1: repeat", "2: final"]
 
@@ -77,9 +76,7 @@ def test_all_chart_renderers_return_plotly_figures():
         go.Figure,
     )
     assert isinstance(
-        render_pattern_heatmap(
-            np.array([[0.5, 0.5], [0.6, 0.4]]), ["0: x", "1: y"], 0
-        ),
+        render_pattern_heatmap(np.array([[0.5, 0.5], [0.6, 0.4]]), ["0: x", "1: y"], 0),
         go.Figure,
     )
     rows = [

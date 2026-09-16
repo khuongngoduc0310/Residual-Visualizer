@@ -16,7 +16,6 @@ from engine import (
 )
 from inspection_views import inspect_node_payload, options_payload
 
-
 LOCAL_SERVER_NAME = "127.0.0.1"
 SERVER_PORT = 7860
 SHARE_PUBLICLY = False

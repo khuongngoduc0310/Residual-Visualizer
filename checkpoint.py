@@ -25,7 +25,6 @@ from preprocess import (
     validate_vocabulary,
 )
 
-
 CHECKPOINT_FORMAT_VERSION = 3
 SUPPORTED_TENSORFLOW_VERSION = "2.20.0"
 SUPPORTED_KERAS_VERSION = "3.13.2"
@@ -190,16 +189,14 @@ def _validate_model(model: Model, config: ModelConfig) -> None:
     expected_layer_names = [
         "token_ids",
         "token_and_position_embedding",
-        *[
-            f"transformer_block_{index}"
-            for index in range(NUM_TRANSFORMER_BLOCKS)
-        ],
+        *[f"transformer_block_{index}" for index in range(NUM_TRANSFORMER_BLOCKS)],
         "final_output_layer_norm",
         "token_probabilities",
     ]
-    if model.name != ARCHITECTURE_NAME or [
-        layer.name for layer in model.layers
-    ] != expected_layer_names:
+    if (
+        model.name != ARCHITECTURE_NAME
+        or [layer.name for layer in model.layers] != expected_layer_names
+    ):
         raise CheckpointError("The model architecture does not match config")
 
     embedding = model.get_layer("token_and_position_embedding")
@@ -233,9 +230,7 @@ def _validate_model(model: Model, config: ModelConfig) -> None:
     ):
         raise CheckpointError("The embedding or output does not match config")
     if embedding.vocab_size != output.units:
-        raise CheckpointError(
-            "The embedding and output vocabulary sizes do not match"
-        )
+        raise CheckpointError("The embedding and output vocabulary sizes do not match")
     if config.num_blocks != len(transformers):
         raise CheckpointError("The transformer block count does not match config")
 
@@ -261,8 +256,7 @@ def _validate_model(model: Model, config: ModelConfig) -> None:
             or transformer.ffn_2.units != config.embedding_dim
             or not transformer.ffn_1.use_bias
             or not transformer.ffn_2.use_bias
-            or tf.keras.activations.serialize(transformer.ffn_2.activation)
-            != "linear"
+            or tf.keras.activations.serialize(transformer.ffn_2.activation) != "linear"
             or not attention_config["use_bias"]
             or attention_config["dropout"] != 0.0
         ):
@@ -271,26 +265,18 @@ def _validate_model(model: Model, config: ModelConfig) -> None:
             transformer.dropout_rate != config.dropout_rate
             or transformer.dropout_1.rate != config.dropout_rate
             or transformer.dropout_2.rate != config.dropout_rate
-            or transformer.feed_forward_activation
-            != config.feed_forward_activation
+            or transformer.feed_forward_activation != config.feed_forward_activation
             or tf.keras.activations.serialize(transformer.ffn_1.activation)
             != config.feed_forward_activation
             or transformer.layer_norm_epsilon != config.layer_norm_epsilon
-            or transformer.feed_forward_activity_l1
-            != config.feed_forward_activity_l1
+            or transformer.feed_forward_activity_l1 != config.feed_forward_activity_l1
         ):
             raise CheckpointError("The transformer layers do not match config")
-        norms.extend(
-            (transformer.attention_input_norm, transformer.ffn_input_norm)
-        )
+        norms.extend((transformer.attention_input_norm, transformer.ffn_input_norm))
 
-    if (
-        any(
-            norm.axis != [-1] or not norm.center or not norm.scale
-            for norm in norms
-        )
-        or any(norm.epsilon != config.layer_norm_epsilon for norm in norms)
-    ):
+    if any(
+        norm.axis != [-1] or not norm.center or not norm.scale for norm in norms
+    ) or any(norm.epsilon != config.layer_norm_epsilon for norm in norms):
         raise CheckpointError("The transformer layers do not match config")
 
 
@@ -301,9 +287,7 @@ def _reject_unexpected_files(directory: Path) -> None:
         if entry.name not in CHECKPOINT_FILENAMES
     )
     if unexpected:
-        raise CheckpointError(
-            f"Unexpected checkpoint file: {', '.join(unexpected)}"
-        )
+        raise CheckpointError(f"Unexpected checkpoint file: {', '.join(unexpected)}")
 
 
 def _require_empty_checkpoint_directory(directory: Path) -> None:
@@ -359,9 +343,7 @@ def _validate_checkpoint_digest(path: Path, document, vocabulary) -> None:
     if isinstance(saved_digest, bytes):
         saved_digest = saved_digest.decode("ascii", errors="replace")
     if saved_digest != _checkpoint_digest(document, vocabulary):
-        raise CheckpointError(
-            "The checkpoint files do not match each other"
-        )
+        raise CheckpointError("The checkpoint files do not match each other")
 
 
 def _require_supported_tensorflow(version, description):

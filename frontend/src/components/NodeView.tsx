@@ -78,17 +78,13 @@ export function NodeView({
           <input
             type="checkbox"
             checked={inspect.vocab_contribution_present}
-            onChange={(event) =>
-              onVocabContributionsChange(event.target.checked)
-            }
+            onChange={(event) => onVocabContributionsChange(event.target.checked)}
             disabled={inspect.view === "diff"}
             data-testid="vocab-contribution-toggle"
           />
           <span>
             Show vocabulary contributions
-            {inspect.view === "diff"
-              ? " (available in baseline or ablated view)"
-              : ""}
+            {inspect.view === "diff" ? " (available in baseline or ablated view)" : ""}
           </span>
         </label>
       )}
@@ -99,28 +95,30 @@ export function NodeView({
             <div>
               <h3 className="ct-subheading">Projected next-token readout</h3>
               <p className="ct-muted">
-                This residual state is projected through the model&apos;s final
-                output matrix.
+                This residual state is projected through the model&apos;s final output
+                matrix.
               </p>
               {inspect.view === "ablated" && inspect.ablation ? (
                 <p className="ct-input-hint" data-testid="deembed-context">
                   Ablation target: {inspect.ablation.node_label}; dimensions{" "}
-                  {inspect.ablation.dims.join(", ")}; {inspect.ablation.scope === "all"
+                  {inspect.ablation.dims.join(", ")};{" "}
+                  {inspect.ablation.scope === "all"
                     ? "all prompt tokens"
-                    : `token ${inspect.ablation.position}`}.
+                    : `token ${inspect.ablation.position}`}
+                  .
                 </p>
               ) : null}
             </div>
           </div>
           {inspect.view === "ablated" && inspect.deembed_state_changed === false ? (
             <p className="ct-status" data-testid="deembed-no-effect">
-              The selected residual state did not change under this ablation,
-              so its projected prediction is unchanged.
+              The selected residual state did not change under this ablation, so its
+              projected prediction is unchanged.
             </p>
           ) : inspect.view === "ablated" && inspect.deembed_has_effect === false ? (
             <p className="ct-status" data-testid="deembed-no-effect">
-              The residual state changed, but its projected probabilities did
-              not change measurably.
+              The residual state changed, but its projected probabilities did not change
+              measurably.
             </p>
           ) : null}
           <div
@@ -164,8 +162,7 @@ export function NodeView({
                 </table>
                 {inspect.deembed_top.length === 0 ? (
                   <p className="ct-status ct-status-error" role="alert">
-                    Projected prediction data was missing from the server
-                    response.
+                    Projected prediction data was missing from the server response.
                   </p>
                 ) : null}
               </div>
@@ -174,10 +171,7 @@ export function NodeView({
           {inspect.view === "ablated" && inspect.deembed_movers.length > 0 ? (
             <div className="ct-table-wrap">
               <h3 className="ct-subheading">Projected probability movement</h3>
-              <table
-                className="ct-table"
-                data-testid="deembed-comparison-table"
-              >
+              <table className="ct-table" data-testid="deembed-comparison-table">
                 <thead>
                   <tr>
                     <th>Token</th>
@@ -209,15 +203,14 @@ export function NodeView({
         >
           <h3 className="ct-subheading">Direct logit attribution</h3>
           <p className="ct-muted">
-            Signed contributions through the model&apos;s final normalization
-            scale and vocabulary kernel. Positive values promote a token;
-            negative values suppress it. These are not probabilities.
+            Signed contributions through the model&apos;s final normalization scale and
+            vocabulary kernel. Positive values promote a token; negative values suppress
+            it. These are not probabilities.
           </p>
           {inspect.view === "ablated" ? (
             <p className="ct-input-hint">
-              Movement can come from the update, the final normalization
-              context, or both; unchanged attribution does not imply an
-              unchanged final prediction.
+              Movement can come from the update, the final normalization context, or
+              both; unchanged attribution does not imply an unchanged final prediction.
             </p>
           ) : null}
           {inspect.view === "ablated" && inspect.ablation ? (
@@ -226,7 +219,8 @@ export function NodeView({
               {inspect.ablation.dims.join(", ")};{" "}
               {inspect.ablation.scope === "all"
                 ? "all prompt tokens"
-                : `token ${inspect.ablation.position}`}.
+                : `token ${inspect.ablation.position}`}
+              .
             </p>
           ) : null}
           {inspect.view === "ablated" &&
@@ -410,9 +404,7 @@ export function NodeView({
                       id="hypothesized-token"
                       className="ct-text-input"
                       value={highlightToken}
-                      onChange={(event) =>
-                        onHighlightTokenChange(event.target.value)
-                      }
+                      onChange={(event) => onHighlightTokenChange(event.target.value)}
                       placeholder="e.g. the"
                       data-testid="hypothesized-token-input"
                     />
@@ -479,7 +471,8 @@ export function NodeView({
                 </table>
               </div>
               <p className="ct-input-hint" data-testid="position-effects">
-                Effect by position: {inspect.position_effects
+                Effect by position:{" "}
+                {inspect.position_effects
                   .map(
                     (effect) =>
                       `${effect.position} ${effect.text} (${effect.effect.toFixed(4)})`,

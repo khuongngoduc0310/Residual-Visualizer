@@ -1,0 +1,13 @@
+target-version = "py312"
+line-length = 88
+extend-exclude = ["notebook"]
+
+[lint]
+select = ["E", "F", "W", "I", "B", "C4"]
+ignore = ["B008"]
+
+[lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[format]
+quote-style = "double"
